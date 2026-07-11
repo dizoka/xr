@@ -24,3 +24,7 @@ class EditProductStates(StatesGroup):
 
 class EditSettingStates(StatesGroup):
     value = State()
+
+
+class StaffProductEditStates(StatesGroup):
+    value = State()
