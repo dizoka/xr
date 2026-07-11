@@ -403,7 +403,9 @@ class UserHandlers:
         await state.clear()
         if inquiry is not None:
             currency = await self._safe_setting("currency") or "грн"
-            for admin_id in self.admin_ids:
+            staff_ids = await self.catalog.list_staff_admins()
+            recipients = set(self.admin_ids) | set(staff_ids)
+            for admin_id in recipients:
                 try:
                     await bot.send_message(
                         admin_id,

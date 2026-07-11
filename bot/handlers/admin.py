@@ -119,8 +119,9 @@ class AdminHandlers:
             return
         await self.catalog.add_staff_admin(user_id)
         await message.answer(
-            f"✅ Працівнику <code>{user_id}</code> видано обмежену адмінку.\n"
-            "Доступ: ціна, кількість і наявність."
+            f"✅ Користувачу <code>{user_id}</code> видано повну адмінку.\n"
+            "Доступ: товари, категорії, заявки, налаштування та статистика.\n"
+            "Керувати іншими адміністраторами може лише власник."
         )
 
     async def remove_staff_command(self, message: Message, command: CommandObject, is_owner_admin: bool = False) -> None:
@@ -138,10 +139,10 @@ class AdminHandlers:
             return
         ids = await self.catalog.list_staff_admins()
         if not ids:
-            await message.answer("Працівників з обмеженим доступом поки немає.")
+            await message.answer("Додаткових адміністраторів поки немає.")
             return
         lines = "\n".join(f"• <code>{user_id}</code>" for user_id in ids)
-        await message.answer("<b>Працівники з обмеженим доступом:</b>\n\n" + lines)
+        await message.answer("<b>Додаткові адміністратори:</b>\n\n" + lines)
 
     async def unknown_admin_button(self, callback: CallbackQuery, state: FSMContext) -> None:
         await answer_callback_safely(
@@ -168,38 +169,18 @@ class AdminHandlers:
 
     async def admin_command(self, message: Message, state: FSMContext, is_owner_admin: bool = False) -> None:
         await state.clear()
-        if is_owner_admin:
-            await message.answer(await self._admin_text(), reply_markup=admin_kb.main_menu())
-        else:
-            await message.answer(
-                "<b>📦 Панель працівника</b>\n\nВи можете змінювати лише ціну, кількість і наявність товарів.",
-                reply_markup=admin_kb.staff_main_menu(),
-            )
+        await message.answer(await self._admin_text(), reply_markup=admin_kb.main_menu())
 
     async def home(self, callback: CallbackQuery, state: FSMContext, is_owner_admin: bool = False) -> None:
         await state.clear()
         if callback.message:
-            if is_owner_admin:
-                await replace_with_text(callback.message, await self._admin_text(), admin_kb.main_menu())
-            else:
-                await replace_with_text(
-                    callback.message,
-                    "<b>📦 Панель працівника</b>\n\nДоступні лише ціна, кількість і наявність.",
-                    admin_kb.staff_main_menu(),
-                )
+            await replace_with_text(callback.message, await self._admin_text(), admin_kb.main_menu())
         await answer_callback_safely(callback)
 
     async def cancel(self, callback: CallbackQuery, state: FSMContext, is_owner_admin: bool = False) -> None:
         await state.clear()
         if callback.message:
-            if is_owner_admin:
-                await replace_with_text(callback.message, await self._admin_text(), admin_kb.main_menu())
-            else:
-                await replace_with_text(
-                    callback.message,
-                    "<b>📦 Панель працівника</b>\n\nДоступні лише ціна, кількість і наявність.",
-                    admin_kb.staff_main_menu(),
-                )
+            await replace_with_text(callback.message, await self._admin_text(), admin_kb.main_menu())
         await answer_callback_safely(callback, "Дію скасовано")
 
     # Categories
@@ -353,7 +334,7 @@ class AdminHandlers:
             await replace_with_text(
                 callback.message,
                 "<b>📦 Керування товарами</b>\n\nОберіть категорію:",
-                (admin_kb.product_categories(categories) if is_owner_admin else admin_kb.staff_product_categories(categories)),
+                admin_kb.product_categories(categories),
             )
         await answer_callback_safely(callback)
 
@@ -399,19 +380,13 @@ class AdminHandlers:
         await replace_with_text(
             callback.message,
             text,
-            (admin_kb.admin_products_list(
+            admin_kb.admin_products_list(
                 products,
                 category_id=category_id,
                 page=page,
                 total_pages=total_pages,
                 currency=currency,
-            ) if is_owner_admin else admin_kb.staff_products_list(
-                products,
-                category_id=category_id,
-                page=page,
-                total_pages=total_pages,
-                currency=currency,
-            )),
+            ),
         )
         await answer_callback_safely(callback)
 
@@ -515,7 +490,7 @@ class AdminHandlers:
             callback.message,
             text=admin_product_text(product, currency),
             photo_file_id=product.photo_file_id,
-            reply_markup=(admin_kb.product_actions(product, page) if is_owner_admin else admin_kb.staff_product_actions(product, page)),
+            reply_markup=admin_kb.product_actions(product, page),
         )
         await answer_callback_safely(callback)
 
@@ -585,7 +560,7 @@ class AdminHandlers:
             product = await self.catalog.get_product(product_id)
             currency = await self.catalog.get_setting("currency", "грн")
             if product:
-                keyboard = admin_kb.product_actions(product, 0) if is_owner_admin else admin_kb.staff_product_actions(product, 0)
+                keyboard = admin_kb.product_actions(product, 0)
                 await message.answer("✅ Кількість оновлено.\n\n" + admin_product_text(product, currency), reply_markup=keyboard)
             return
         if field in {"brand", "description"} and value == "-":
@@ -595,7 +570,7 @@ class AdminHandlers:
         product = await self.catalog.get_product(product_id)
         currency = await self.catalog.get_setting("currency", "грн")
         if product:
-            keyboard = admin_kb.product_actions(product, 0) if is_owner_admin else admin_kb.staff_product_actions(product, 0)
+            keyboard = admin_kb.product_actions(product, 0)
             await message.answer("✅ Товар оновлено.\n\n" + admin_product_text(product, currency), reply_markup=keyboard)
 
     async def product_photo_delete(self, callback: CallbackQuery, state: FSMContext) -> None:
@@ -626,7 +601,7 @@ class AdminHandlers:
                 callback.message,
                 text=admin_product_text(product, currency),
                 photo_file_id=product.photo_file_id,
-                reply_markup=(admin_kb.product_actions(product, int(page_raw)) if is_owner_admin else admin_kb.staff_product_actions(product, int(page_raw))),
+                reply_markup=admin_kb.product_actions(product, int(page_raw)),
             )
         await answer_callback_safely(callback, "Статус товару змінено")
 
