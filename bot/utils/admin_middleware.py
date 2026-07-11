@@ -10,18 +10,11 @@ from bot.repositories.catalog_repository import CatalogRepository
 
 
 class AdminOnlyMiddleware(BaseMiddleware):
-    """Розділяє повний доступ власника та обмежений доступ працівника."""
+    """Надає власнику та виданим адміністраторам повний доступ до панелі."""
 
-    STAFF_ALLOWED_PREFIXES = (
-        "a:products",
-        "a:plist:",
-        "a:p:",
-        "a:pe:price:",
-        "a:pe:quantity:",
-        "a:ptoggle:",
-        "a:cancel",
-        "a:home",
-    )
+    # Працівники з виданою адмінкою мають повний доступ до інтерфейсу.
+    # Команди керування іншими адміністраторами все одно доступні лише власнику.
+
 
     def __init__(self, owner_ids: frozenset[int], catalog: CatalogRepository) -> None:
         self._owner_ids = owner_ids
@@ -47,14 +40,14 @@ class AdminOnlyMiddleware(BaseMiddleware):
 
         if is_staff:
             if isinstance(event, Message):
+                # Доступ до /admin та всіх кроків FSM у повній адмін-панелі.
                 if event.text and event.text.startswith("/admin"):
                     return await handler(event, data)
-                # Дозволяємо повідомлення лише коли FSM вже направив їх у зміну ціни/кількості.
                 if data.get("raw_state"):
                     return await handler(event, data)
             elif isinstance(event, CallbackQuery):
-                callback_data = event.data or ""
-                if callback_data.startswith(self.STAFF_ALLOWED_PREFIXES):
+                # Повний доступ до всіх кнопок адмін-панелі.
+                if (event.data or "").startswith("a:"):
                     return await handler(event, data)
 
         if isinstance(event, CallbackQuery):
