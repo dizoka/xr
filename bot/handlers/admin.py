@@ -19,6 +19,7 @@ from bot.states.admin import (
     EditSettingStates,
 )
 from bot.utils.admin_middleware import AdminOnlyMiddleware
+from bot.utils.callbacks import CallbackErrorMiddleware, answer_callback_safely
 from bot.utils.messages import replace_with_photo_or_text, replace_with_text
 from bot.utils.text import admin_product_text, h, inquiry_text
 
@@ -38,6 +39,9 @@ class AdminHandlers:
         middleware = AdminOnlyMiddleware(admin_ids)
         self.router.message.middleware(middleware)
         self.router.callback_query.middleware(middleware)
+        self.router.callback_query.middleware(
+            CallbackErrorMiddleware(fallback_text="Не вдалося виконати дію в адмін-панелі.")
+        )
         self._register()
 
     def _register(self) -> None:
@@ -94,6 +98,20 @@ class AdminHandlers:
         self.router.callback_query.register(self.request_detail, F.data.startswith("a:req:"))
         self.router.callback_query.register(self.request_done, F.data.startswith("a:reqdone:"))
         self.router.callback_query.register(self.stats, F.data == "a:stats")
+        self.router.callback_query.register(self.unknown_admin_button, F.data.startswith("a:"))
+
+    async def unknown_admin_button(self, callback: CallbackQuery, state: FSMContext) -> None:
+        await answer_callback_safely(
+            callback,
+            "Кнопку оновлено. Відкриваю адмін-панель.",
+        )
+        await state.clear()
+        if callback.message:
+            await replace_with_text(
+                callback.message,
+                await self._admin_text(),
+                admin_kb.main_menu(),
+            )
 
     async def _admin_text(self) -> str:
         stats = await self.catalog.stats()
@@ -117,7 +135,7 @@ class AdminHandlers:
                 await self._admin_text(),
                 admin_kb.main_menu(),
             )
-        await callback.answer()
+        await answer_callback_safely(callback)
 
     async def cancel(self, callback: CallbackQuery, state: FSMContext) -> None:
         await state.clear()
@@ -127,7 +145,7 @@ class AdminHandlers:
                 await self._admin_text(),
                 admin_kb.main_menu(),
             )
-        await callback.answer("Дію скасовано")
+        await answer_callback_safely(callback, "Дію скасовано")
 
     # Categories
     async def categories(self, callback: CallbackQuery) -> None:
@@ -138,7 +156,7 @@ class AdminHandlers:
                 "<b>📂 Категорії</b>\n\n✅ — видима покупцям\n⛔ — прихована",
                 admin_kb.categories_list(categories),
             )
-        await callback.answer()
+        await answer_callback_safely(callback)
 
     async def category_add_start(self, callback: CallbackQuery, state: FSMContext) -> None:
         await state.set_state(AddCategoryStates.emoji)
@@ -148,7 +166,7 @@ class AdminHandlers:
                 "Надішліть емодзі нової категорії. Наприклад: <b>💨</b>",
                 admin_kb.cancel(),
             )
-        await callback.answer()
+        await answer_callback_safely(callback)
 
     async def add_category_emoji(self, message: Message, state: FSMContext) -> None:
         emoji = (message.text or "").strip()
@@ -179,7 +197,7 @@ class AdminHandlers:
         category_id = int(callback.data.rsplit(":", 1)[1])
         category = await self.catalog.get_category(category_id)
         if category is None:
-            await callback.answer("Категорію не знайдено", show_alert=True)
+            await answer_callback_safely(callback, "Категорію не знайдено", show_alert=True)
             return
         product_count = await self.catalog.count_products(category_id)
         status = "✅ Відображається" if category.active else "⛔ Прихована"
@@ -190,7 +208,7 @@ class AdminHandlers:
             "Під час видалення категорії також буде видалено всі товари в ній."
         )
         await replace_with_text(callback.message, text, admin_kb.category_actions(category))
-        await callback.answer()
+        await answer_callback_safely(callback)
 
     async def category_name_start(self, callback: CallbackQuery, state: FSMContext) -> None:
         category_id = int((callback.data or "").rsplit(":", 1)[1])
@@ -202,7 +220,7 @@ class AdminHandlers:
                 "Надішліть нову назву категорії.",
                 admin_kb.cancel(),
             )
-        await callback.answer()
+        await answer_callback_safely(callback)
 
     async def category_emoji_start(self, callback: CallbackQuery, state: FSMContext) -> None:
         category_id = int((callback.data or "").rsplit(":", 1)[1])
@@ -214,7 +232,7 @@ class AdminHandlers:
                 "Надішліть новий емодзі категорії.",
                 admin_kb.cancel(),
             )
-        await callback.answer()
+        await answer_callback_safely(callback)
 
     async def edit_category_value(self, message: Message, state: FSMContext) -> None:
         value = (message.text or "").strip()
@@ -248,7 +266,7 @@ class AdminHandlers:
                 f"<b>{h(category.emoji)} {h(category.name)}</b>\n\nСтатус: {status}\nТоварів: <b>{count}</b>",
                 admin_kb.category_actions(category),
             )
-        await callback.answer("Статус змінено")
+        await answer_callback_safely(callback, "Статус змінено")
 
     async def category_delete(self, callback: CallbackQuery) -> None:
         category_id = int((callback.data or "").rsplit(":", 1)[1])
@@ -259,7 +277,7 @@ class AdminHandlers:
                 f"Видалити категорію <b>{h(category.name)}</b> та всі товари в ній?",
                 admin_kb.confirm_category_delete(category_id),
             )
-        await callback.answer()
+        await answer_callback_safely(callback)
 
     async def category_delete_confirm(self, callback: CallbackQuery) -> None:
         category_id = int((callback.data or "").rsplit(":", 1)[1])
@@ -271,7 +289,7 @@ class AdminHandlers:
                 "✅ Категорію видалено.",
                 admin_kb.categories_list(categories),
             )
-        await callback.answer()
+        await answer_callback_safely(callback)
 
     # Products
     async def products(self, callback: CallbackQuery) -> None:
@@ -282,7 +300,7 @@ class AdminHandlers:
                 "<b>📦 Керування товарами</b>\n\nОберіть категорію:",
                 admin_kb.product_categories(categories),
             )
-        await callback.answer()
+        await answer_callback_safely(callback)
 
     async def products_list(self, callback: CallbackQuery) -> None:
         if not callback.data or not callback.message:
@@ -292,7 +310,7 @@ class AdminHandlers:
         page = max(0, int(page_raw))
         category = await self.catalog.get_category(category_id)
         if category is None:
-            await callback.answer("Категорію не знайдено", show_alert=True)
+            await answer_callback_safely(callback, "Категорію не знайдено", show_alert=True)
             return
         total = await self.catalog.count_products(category_id)
         total_pages = max(1, math.ceil(total / PRODUCTS_PER_PAGE))
@@ -317,13 +335,13 @@ class AdminHandlers:
                 currency=currency,
             ),
         )
-        await callback.answer()
+        await answer_callback_safely(callback)
 
     async def product_add_start(self, callback: CallbackQuery, state: FSMContext) -> None:
         category_id = int((callback.data or "").rsplit(":", 1)[1])
         category = await self.catalog.get_category(category_id)
         if category is None:
-            await callback.answer("Категорію не знайдено", show_alert=True)
+            await answer_callback_safely(callback, "Категорію не знайдено", show_alert=True)
             return
         await state.set_state(AddProductStates.name)
         await state.update_data(category_id=category_id)
@@ -333,7 +351,7 @@ class AdminHandlers:
                 f"Додавання товару до <b>{h(category.name)}</b>.\n\nНадішліть назву моделі.",
                 admin_kb.cancel(),
             )
-        await callback.answer()
+        await answer_callback_safely(callback)
 
     async def add_product_name(self, message: Message, state: FSMContext) -> None:
         value = (message.text or "").strip()
@@ -402,7 +420,7 @@ class AdminHandlers:
     async def product_photo_skip(self, callback: CallbackQuery, state: FSMContext) -> None:
         if callback.message:
             await self._finish_add_product(callback.message, state, None)
-        await callback.answer()
+        await answer_callback_safely(callback)
 
     async def product_detail(self, callback: CallbackQuery, bot: Bot) -> None:
         if not callback.data or not callback.message:
@@ -410,7 +428,7 @@ class AdminHandlers:
         _, _, product_id_raw, page_raw = callback.data.split(":", maxsplit=3)
         product = await self.catalog.get_product(int(product_id_raw))
         if product is None:
-            await callback.answer("Товар не знайдено", show_alert=True)
+            await answer_callback_safely(callback, "Товар не знайдено", show_alert=True)
             return
         page = max(0, int(page_raw))
         currency = await self.catalog.get_setting("currency", "грн")
@@ -421,7 +439,7 @@ class AdminHandlers:
             photo_file_id=product.photo_file_id,
             reply_markup=admin_kb.product_actions(product, page),
         )
-        await callback.answer()
+        await answer_callback_safely(callback)
 
     async def product_edit_start(self, callback: CallbackQuery, state: FSMContext) -> None:
         if not callback.data:
@@ -430,7 +448,7 @@ class AdminHandlers:
         product_id = int(product_id_raw)
         product = await self.catalog.get_product(product_id)
         if product is None:
-            await callback.answer("Товар не знайдено", show_alert=True)
+            await answer_callback_safely(callback, "Товар не знайдено", show_alert=True)
             return
         prompts = {
             "name": "Надішліть нову назву товару.",
@@ -444,7 +462,7 @@ class AdminHandlers:
         keyboard = admin_kb.edit_photo(product_id) if field == "photo_file_id" else admin_kb.cancel()
         if callback.message:
             await replace_with_text(callback.message, prompts[field], keyboard)
-        await callback.answer()
+        await answer_callback_safely(callback)
 
     async def edit_product_photo(self, message: Message, state: FSMContext) -> None:
         data = await state.get_data()
@@ -500,7 +518,7 @@ class AdminHandlers:
                 "✅ Фото видалено.\n\n" + admin_product_text(product, currency),
                 admin_kb.product_actions(product, 0),
             )
-        await callback.answer()
+        await answer_callback_safely(callback)
 
     async def product_toggle(self, callback: CallbackQuery, bot: Bot) -> None:
         if not callback.data or not callback.message:
@@ -518,7 +536,7 @@ class AdminHandlers:
                 photo_file_id=product.photo_file_id,
                 reply_markup=admin_kb.product_actions(product, int(page_raw)),
             )
-        await callback.answer("Статус товару змінено")
+        await answer_callback_safely(callback, "Статус товару змінено")
 
     async def product_delete(self, callback: CallbackQuery) -> None:
         if not callback.data or not callback.message:
@@ -531,7 +549,7 @@ class AdminHandlers:
                 f"Видалити товар <b>{h(product.name)}</b>?",
                 admin_kb.confirm_product_delete(product.id, int(page_raw)),
             )
-        await callback.answer()
+        await answer_callback_safely(callback)
 
     async def product_delete_confirm(self, callback: CallbackQuery) -> None:
         if not callback.data or not callback.message:
@@ -539,7 +557,7 @@ class AdminHandlers:
         _, _, product_id_raw, page_raw = callback.data.split(":", maxsplit=3)
         product = await self.catalog.get_product(int(product_id_raw))
         if product is None:
-            await callback.answer("Товар уже видалено", show_alert=True)
+            await answer_callback_safely(callback, "Товар уже видалено", show_alert=True)
             return
         category_id = product.category_id
         await self.catalog.delete_product(product.id)
@@ -565,7 +583,7 @@ class AdminHandlers:
                 currency=currency,
             ),
         )
-        await callback.answer()
+        await answer_callback_safely(callback)
 
     # Settings
     async def settings(self, callback: CallbackQuery) -> None:
@@ -579,7 +597,7 @@ class AdminHandlers:
         )
         if callback.message:
             await replace_with_text(callback.message, text, admin_kb.settings_menu())
-        await callback.answer()
+        await answer_callback_safely(callback)
 
     async def setting_edit_start(self, callback: CallbackQuery, state: FSMContext) -> None:
         key = (callback.data or "").split(":", maxsplit=2)[2]
@@ -592,7 +610,7 @@ class AdminHandlers:
             "age_warning",
         }
         if key not in allowed:
-            await callback.answer("Невідоме налаштування", show_alert=True)
+            await answer_callback_safely(callback, "Невідоме налаштування", show_alert=True)
             return
         current = await self.catalog.get_setting(key)
         await state.set_state(EditSettingStates.value)
@@ -603,7 +621,7 @@ class AdminHandlers:
                 f"Поточне значення:\n<code>{h(current)}</code>\n\nНадішліть нове значення.",
                 admin_kb.cancel(),
             )
-        await callback.answer()
+        await answer_callback_safely(callback)
 
     async def edit_setting_value(self, message: Message, state: FSMContext) -> None:
         value = (message.text or "").strip()
@@ -628,13 +646,13 @@ class AdminHandlers:
             text += "\n\nНових запитів поки немає."
         if callback.message:
             await replace_with_text(callback.message, text, admin_kb.inquiries_list(inquiries))
-        await callback.answer()
+        await answer_callback_safely(callback)
 
     async def request_detail(self, callback: CallbackQuery) -> None:
         inquiry_id = int((callback.data or "").rsplit(":", 1)[1])
         inquiry = await self.inquiries.get(inquiry_id)
         if inquiry is None:
-            await callback.answer("Запит не знайдено", show_alert=True)
+            await answer_callback_safely(callback, "Запит не знайдено", show_alert=True)
             return
         currency = await self.catalog.get_setting("currency", "грн")
         if callback.message:
@@ -643,7 +661,7 @@ class AdminHandlers:
                 inquiry_text(inquiry, currency),
                 admin_kb.inquiry_actions(inquiry.id, inquiry.user_id),
             )
-        await callback.answer()
+        await answer_callback_safely(callback)
 
     async def request_done(self, callback: CallbackQuery) -> None:
         inquiry_id = int((callback.data or "").rsplit(":", 1)[1])
@@ -655,7 +673,7 @@ class AdminHandlers:
                 "✅ Запит позначено як опрацьований.",
                 admin_kb.inquiries_list(inquiries),
             )
-        await callback.answer()
+        await answer_callback_safely(callback)
 
     async def stats(self, callback: CallbackQuery) -> None:
         stats = await self.catalog.stats()
@@ -668,4 +686,4 @@ class AdminHandlers:
         )
         if callback.message:
             await replace_with_text(callback.message, text, admin_kb.main_menu())
-        await callback.answer()
+        await answer_callback_safely(callback)

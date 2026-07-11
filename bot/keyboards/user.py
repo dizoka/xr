@@ -1,10 +1,29 @@
 from __future__ import annotations
 
+from urllib.parse import urlparse
+
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot.models import Category, Product
 from bot.utils.text import product_title
+
+
+def _safe_contact_url(value: str | None) -> str | None:
+    """Повертає лише придатне для Telegram посилання без пробілів і переносів."""
+    if not value:
+        return None
+    url = value.strip()
+    if any(char.isspace() for char in url):
+        return None
+    if url.startswith("tg://"):
+        return url if len(url) > len("tg://") else None
+    if not url.startswith(("https://", "http://")):
+        return None
+    parsed = urlparse(url)
+    if not parsed.scheme or not parsed.netloc:
+        return None
+    return url
 
 
 def age_confirmation() -> InlineKeyboardMarkup:
@@ -15,13 +34,16 @@ def age_confirmation() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def main_menu(contact_url: str) -> InlineKeyboardMarkup:
+def main_menu(contact_url: str = "") -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="🛍 Каталог", callback_data="u:catalog")
     builder.button(text="🔎 Пошук", callback_data="u:search")
     builder.button(text="📍 Адреса та графік", callback_data="u:info")
-    if contact_url.startswith(("https://", "http://", "tg://")):
-        builder.button(text="💬 Зв’язатися з продавцем", url=contact_url)
+
+    safe_url = _safe_contact_url(contact_url)
+    if safe_url:
+        builder.button(text="💬 Зв’язатися з продавцем", url=safe_url)
+
     builder.adjust(2, 1, 1)
     return builder.as_markup()
 
@@ -115,4 +137,12 @@ def search_results(products: list[Product], currency: str) -> InlineKeyboardMark
 def back_home() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="🏠 Головне меню", callback_data="u:home")
+    return builder.as_markup()
+
+
+def fallback_menu() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🛍 Каталог", callback_data="u:catalog")
+    builder.button(text="🏠 Головне меню", callback_data="u:home")
+    builder.adjust(1)
     return builder.as_markup()

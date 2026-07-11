@@ -36,15 +36,17 @@ def build_application(settings: Settings) -> web.Application:
     )
     dispatcher = Dispatcher(storage=MemoryStorage())
 
+    # Спочатку підключаємо користувацькі кнопки. Так u:* завжди
+    # обробляються каталогом і не перетинаються з адмін-middleware.
     dispatcher.include_router(
-        AdminHandlers(
+        UserHandlers(
             catalog_repository,
             inquiry_repository,
             settings.admin_ids,
         ).router
     )
     dispatcher.include_router(
-        UserHandlers(
+        AdminHandlers(
             catalog_repository,
             inquiry_repository,
             settings.admin_ids,

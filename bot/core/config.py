@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 import os
+import re
 import secrets
 
 from dotenv import load_dotenv
@@ -64,9 +66,18 @@ class Settings:
         if not base_url.startswith("https://"):
             raise ConfigError("Адреса webhook повинна починатися з https://")
 
-        webhook_secret = os.getenv("WEBHOOK_SECRET", "").strip()
-        if not webhook_secret:
-            webhook_secret = secrets.token_urlsafe(32)
+        raw_webhook_secret = os.getenv("WEBHOOK_SECRET", "").strip()
+        if not raw_webhook_secret:
+            # Telegram дозволяє лише A-Z, a-z, 0-9, "_" і "-".
+            webhook_secret = secrets.token_hex(32)
+        elif re.fullmatch(r"[A-Za-z0-9_-]{1,256}", raw_webhook_secret):
+            webhook_secret = raw_webhook_secret
+        else:
+            # Render іноді генерує секрет зі спецсимволами, які Telegram відхиляє.
+            # Перетворюємо його на стабільний безпечний hex-рядок.
+            webhook_secret = hashlib.sha256(
+                raw_webhook_secret.encode("utf-8")
+            ).hexdigest()
 
         try:
             port = int(os.getenv("PORT", "10000"))
