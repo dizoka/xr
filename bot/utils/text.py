@@ -21,7 +21,8 @@ def product_card_text(product: Product, currency: str) -> str:
         f"<b>{h(product.category_emoji)} {h(product_title(product))}</b>\n\n"
         f"{description}\n\n"
         f"💰 <b>{h(product.price)} {h(currency)}</b>\n"
-        f"{status}\n\n"
+        f"{status}\n"
+        f"📦 Кількість: <b>{product.quantity}</b>\n\n"
         "🔞 Продаж лише повнолітнім. Продавець може перевірити вік."
     )
 
@@ -36,6 +37,7 @@ def admin_product_text(product: Product, currency: str) -> str:
         f"Категорія: {h(product.category_emoji)} {h(product.category_name)}\n"
         f"Ціна: <b>{h(product.price)} {h(currency)}</b>\n"
         f"Статус: {status}\n"
+        f"Кількість: <b>{product.quantity}</b>\n"
         f"Фото: {photo}\n\n"
         f"Опис:\n{h(product.description or '—')}"
     )
@@ -46,7 +48,9 @@ def inquiry_text(inquiry: Inquiry, currency: str) -> str:
     return (
         f"<b>Новий запит #{inquiry.id}</b>\n\n"
         f"Товар: <b>{h(inquiry.product_name)}</b>\n"
-        f"Ціна: {h(inquiry.product_price)} {h(currency)}\n\n"
+        f"Ціна: {h(inquiry.product_price)} {h(currency)}\n"
+        f"Варіант: <b>{h(inquiry.variant or '—')}</b>\n"
+        f"Коментар: {h(inquiry.comment or '—')}\n\n"
         f"Покупець: <a href=\"tg://user?id={inquiry.user_id}\">{h(inquiry.full_name)}</a>\n"
         f"Username: {username}\n"
         f"Telegram ID: <code>{inquiry.user_id}</code>\n"
