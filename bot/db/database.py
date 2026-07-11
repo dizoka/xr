@@ -77,6 +77,8 @@ class Database:
                 photo_file_id TEXT,
                 in_stock INTEGER NOT NULL DEFAULT 1 CHECK(in_stock IN (0, 1)),
                 position INTEGER NOT NULL DEFAULT 0,
+                quantity INTEGER NOT NULL DEFAULT 1,
+                variant_type TEXT NOT NULL DEFAULT 'none',
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY(category_id) REFERENCES categories(id) ON DELETE CASCADE
             );
@@ -92,9 +94,16 @@ class Database:
                 username TEXT,
                 full_name TEXT NOT NULL,
                 product_id INTEGER NOT NULL,
+                variant TEXT NOT NULL DEFAULT '',
+                comment TEXT NOT NULL DEFAULT '',
                 status TEXT NOT NULL DEFAULT 'new' CHECK(status IN ('new', 'done')),
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY(product_id) REFERENCES products(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS staff_admins (
+                user_id INTEGER PRIMARY KEY,
+                added_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
 
             CREATE INDEX IF NOT EXISTS idx_products_category
@@ -106,6 +115,18 @@ class Database:
         async with self._lock:
             def _initialize() -> None:
                 self.connection.executescript(schema)
+                # Безпечні міграції для вже створеної Turso-бази.
+                columns = {row[1] for row in self.connection.execute("PRAGMA table_info(products)").fetchall()}
+                if "quantity" not in columns:
+                    self.connection.execute("ALTER TABLE products ADD COLUMN quantity INTEGER NOT NULL DEFAULT 1")
+                self.connection.execute("UPDATE products SET quantity = 1 WHERE in_stock = 1 AND quantity = 0")
+                if "variant_type" not in columns:
+                    self.connection.execute("ALTER TABLE products ADD COLUMN variant_type TEXT NOT NULL DEFAULT 'none'")
+                inquiry_columns = {row[1] for row in self.connection.execute("PRAGMA table_info(inquiries)").fetchall()}
+                if "variant" not in inquiry_columns:
+                    self.connection.execute("ALTER TABLE inquiries ADD COLUMN variant TEXT NOT NULL DEFAULT ''")
+                if "comment" not in inquiry_columns:
+                    self.connection.execute("ALTER TABLE inquiries ADD COLUMN comment TEXT NOT NULL DEFAULT ''")
                 self.connection.commit()
 
             await asyncio.to_thread(_initialize)
