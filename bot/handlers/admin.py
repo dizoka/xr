@@ -312,6 +312,23 @@ class AdminHandlers:
         if category is None:
             await answer_callback_safely(callback, "Категорію не знайдено", show_alert=True)
             return
+
+        if category.name.strip().casefold() == "акції":
+            promotions_url = await self.catalog.get_setting("promotions_url", "")
+            text = (
+                f"<b>{h(category.emoji)} {h(category.name)}</b>\n\n"
+                "Тут налаштовується посилання на повідомлення в Telegram-каналі, "
+                "де зібрані всі актуальні знижки.\n\n"
+                f"Поточне посилання: <code>{h(promotions_url) if promotions_url else 'Не задано'}</code>"
+            )
+            await replace_with_text(
+                callback.message,
+                text,
+                admin_kb.promotions_products_menu(category_id, bool(promotions_url)),
+            )
+            await answer_callback_safely(callback)
+            return
+
         total = await self.catalog.count_products(category_id)
         total_pages = max(1, math.ceil(total / PRODUCTS_PER_PAGE))
         page = min(page, total_pages - 1)
@@ -586,14 +603,22 @@ class AdminHandlers:
         await answer_callback_safely(callback)
 
     # Settings
-    async def settings(self, callback: CallbackQuery) -> None:
-        values = await self.catalog.get_all_settings()
+    async def settings(self, callback: CallbackQuery, state: FSMContext) -> None:
+        # Очищаємо будь-який незавершений сценарій редагування, інакше старий
+        # FSM-стан може перехопити наступне повідомлення адміністратора.
+        await state.clear()
+
+        store_name = await self.catalog.get_setting("store_name", "CrystalStore | Ковель")
+        currency = await self.catalog.get_setting("currency", "грн")
+        contact_url = await self.catalog.get_setting("contact_url", "Не задано")
+        promotions_url = await self.catalog.get_setting("promotions_url", "")
+
         text = (
             "<b>⚙️ Налаштування магазину</b>\n\n"
-            f"Назва: {h(values.get('store_name', ''))}\n"
-            f"Валюта: {h(values.get('currency', ''))}\n"
-            f"Посилання продавця: {h(values.get('contact_url', ''))}\n"
-            f"Посилання на акції: {h(values.get('promotions_url', 'Не задано')) or 'Не задано'}\n\n"
+            f"Назва: {h(store_name)}\n"
+            f"Валюта: {h(currency)}\n"
+            f"Посилання продавця: {h(contact_url)}\n"
+            f"Посилання на акції: {h(promotions_url) if promotions_url else 'Не задано'}\n\n"
             "Оберіть параметр для зміни."
         )
         if callback.message:
@@ -617,12 +642,22 @@ class AdminHandlers:
         current = await self.catalog.get_setting(key)
         await state.set_state(EditSettingStates.value)
         await state.update_data(key=key)
-        if callback.message:
-            await replace_with_text(
-                callback.message,
-                f"Поточне значення:\n<code>{h(current)}</code>\n\nНадішліть нове значення.",
-                admin_kb.cancel(),
+
+        if key == "promotions_url":
+            prompt = (
+                "<b>🔥 Посилання на повідомлення з акціями</b>\n\n"
+                f"Поточне значення:\n<code>{h(current) if current else 'Не задано'}</code>\n\n"
+                "Надішліть URL конкретного повідомлення у Telegram-каналі.\n"
+                "Наприклад: <code>https://t.me/CrystalStoreKovel/123</code>"
             )
+        else:
+            prompt = (
+                f"Поточне значення:\n<code>{h(current)}</code>\n\n"
+                "Надішліть нове значення."
+            )
+
+        if callback.message:
+            await replace_with_text(callback.message, prompt, admin_kb.cancel())
         await answer_callback_safely(callback)
 
     async def edit_setting_value(self, message: Message, state: FSMContext) -> None:
@@ -637,6 +672,25 @@ class AdminHandlers:
             return
         await self.catalog.set_setting(key, value)
         await state.clear()
+
+        if key == "promotions_url":
+            categories = await self.catalog.list_categories(include_inactive=True)
+            promotions_category = next(
+                (category for category in categories if category.name.strip().casefold() == "акції"),
+                None,
+            )
+            if promotions_category is not None:
+                text = (
+                    "✅ Посилання на акції збережено.\n\n"
+                    f"<b>{h(promotions_category.emoji)} {h(promotions_category.name)}</b>\n\n"
+                    f"Поточне посилання: <code>{h(value)}</code>"
+                )
+                await message.answer(
+                    text,
+                    reply_markup=admin_kb.promotions_products_menu(promotions_category.id, True),
+                )
+                return
+
         await message.answer("✅ Налаштування збережено.", reply_markup=admin_kb.settings_menu())
 
     # Inquiries and statistics
