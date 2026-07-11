@@ -25,6 +25,8 @@ class Product:
     photo_file_id: str | None
     in_stock: bool
     position: int
+    quantity: int = 0
+    variant_type: str = "none"
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,6 +40,8 @@ class Inquiry:
     product_price: str
     status: str
     created_at: str
+    variant: str = ""
+    comment: str = ""
 
 
 @dataclass(frozen=True, slots=True)
