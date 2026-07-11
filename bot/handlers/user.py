@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import math
 
 from aiogram import Bot, F, Router
@@ -30,6 +31,10 @@ class UserHandlers:
         self.catalog = catalog
         self.inquiries = inquiries
         self.admin_ids = admin_ids
+        # Швидкий резерв на поточний запуск. Основне підтвердження все одно
+        # зберігається в Turso, але ця множина не дає кнопці «зависнути»,
+        # якщо база тимчасово прокидається або відповідає повільно.
+        self._session_age_confirmations: set[int] = set()
         self.router = Router(name="user")
         self._register()
 
@@ -65,7 +70,16 @@ class UserHandlers:
         await message.answer(h(warning), reply_markup=user_kb.age_confirmation())
 
     async def _has_access(self, user_id: int) -> bool:
-        return await self.catalog.is_age_confirmed(user_id)
+        if user_id in self._session_age_confirmations:
+            return True
+        try:
+            confirmed = await self.catalog.is_age_confirmed(user_id)
+        except Exception:
+            logging.exception("Не вдалося перевірити підтвердження віку для user_id=%s", user_id)
+            return False
+        if confirmed:
+            self._session_age_confirmations.add(user_id)
+        return confirmed
 
     async def start(self, message: Message, state: FSMContext) -> None:
         await state.clear()
@@ -89,24 +103,38 @@ class UserHandlers:
     async def noop(self, callback: CallbackQuery) -> None:
         await callback.answer()
 
-    async def age_yes(self, callback: CallbackQuery) -> None:
-        await self.catalog.confirm_age(callback.from_user.id)
-        text, contact_url = await self._home_text()
-        if callback.message:
-            await replace_with_text(
-                callback.message,
-                text,
-                user_kb.main_menu(contact_url),
-            )
+    async def age_yes(self, callback: CallbackQuery, state: FSMContext) -> None:
+        # Відповідаємо Telegram одразу, щоб на кнопці не крутився індикатор.
         await callback.answer("Вік підтверджено")
+        await state.clear()
 
-    async def age_no(self, callback: CallbackQuery) -> None:
+        user_id = callback.from_user.id
+        self._session_age_confirmations.add(user_id)
+
+        try:
+            await self.catalog.confirm_age(user_id)
+        except Exception:
+            # Навіть якщо Turso щойно прокидається, користувач одразу потрапить
+            # у каталог. Після наступного натискання запис буде зроблено знову.
+            logging.exception("Не вдалося зберегти підтвердження віку для user_id=%s", user_id)
+
+        text, contact_url = await self._home_text()
+        keyboard = user_kb.main_menu(contact_url)
+        if callback.message:
+            try:
+                await replace_with_text(callback.message, text, keyboard)
+            except Exception:
+                logging.exception("Не вдалося замінити повідомлення після підтвердження віку")
+                await callback.message.answer(text, reply_markup=keyboard)
+
+    async def age_no(self, callback: CallbackQuery, state: FSMContext) -> None:
+        await callback.answer()
+        await state.clear()
         if callback.message:
             await replace_with_text(
                 callback.message,
                 "Доступ до каталогу закрито. Повертайтеся після досягнення повноліття.",
             )
-        await callback.answer()
 
     async def home(self, callback: CallbackQuery, state: FSMContext) -> None:
         await state.clear()

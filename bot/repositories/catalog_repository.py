@@ -67,7 +67,12 @@ class CatalogRepository:
 
     async def confirm_age(self, user_id: int) -> None:
         await self._database.execute(
-            "INSERT OR REPLACE INTO age_confirmations(user_id) VALUES (?)",
+            """
+            INSERT INTO age_confirmations(user_id, confirmed_at)
+            VALUES (?, CURRENT_TIMESTAMP)
+            ON CONFLICT(user_id) DO UPDATE SET
+                confirmed_at = CURRENT_TIMESTAMP
+            """,
             (user_id,),
         )
 
