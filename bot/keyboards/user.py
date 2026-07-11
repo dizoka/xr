@@ -48,13 +48,23 @@ def main_menu(contact_url: str = "") -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def categories_menu(categories: list[Category]) -> InlineKeyboardMarkup:
+def categories_menu(
+    categories: list[Category],
+    promotions_url: str = "",
+) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
+    safe_promotions_url = _safe_contact_url(promotions_url)
     for category in categories:
-        builder.button(
-            text=f"{category.emoji} {category.name}",
-            callback_data=f"u:c:{category.id}:0",
-        )
+        if category.name.strip().casefold() == "акції" and safe_promotions_url:
+            builder.button(
+                text=f"{category.emoji} {category.name}",
+                url=safe_promotions_url,
+            )
+        else:
+            builder.button(
+                text=f"{category.emoji} {category.name}",
+                callback_data=f"u:c:{category.id}:0",
+            )
     builder.button(text="🏠 Головне меню", callback_data="u:home")
     builder.adjust(2, 1)
     return builder.as_markup()

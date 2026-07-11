@@ -156,6 +156,7 @@ def settings_menu() -> InlineKeyboardMarkup:
     builder.button(text="👋 Привітання", callback_data="a:set:welcome_text")
     builder.button(text="📍 Адреса та графік", callback_data="a:set:address_schedule")
     builder.button(text="💬 Посилання продавця", callback_data="a:set:contact_url")
+    builder.button(text="🔥 Посилання на акції", callback_data="a:set:promotions_url")
     builder.button(text="💵 Валюта", callback_data="a:set:currency")
     builder.button(text="🔞 Текст 18+", callback_data="a:set:age_warning")
     builder.button(text="◀️ Адмін-панель", callback_data="a:home")
