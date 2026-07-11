@@ -36,6 +36,8 @@ class CatalogRepository:
             photo_file_id=row["photo_file_id"],
             in_stock=bool(row["in_stock"]),
             position=int(row["position"]),
+            quantity=int(row.get("quantity", 0)),
+            variant_type=str(row.get("variant_type", "none")),
         )
 
     async def get_setting(self, key: str, default: str = "") -> str:
@@ -156,7 +158,7 @@ class CatalogRepository:
             f"""
             SELECT
                 p.id, p.category_id, p.name, p.brand, p.price, p.description,
-                p.photo_file_id, p.in_stock, p.position,
+                p.photo_file_id, p.in_stock, p.position, p.quantity, p.variant_type,
                 c.name AS category_name, c.emoji AS category_emoji
             FROM products p
             JOIN categories c ON c.id = p.category_id
@@ -173,7 +175,7 @@ class CatalogRepository:
             """
             SELECT
                 p.id, p.category_id, p.name, p.brand, p.price, p.description,
-                p.photo_file_id, p.in_stock, p.position,
+                p.photo_file_id, p.in_stock, p.position, p.quantity, p.variant_type,
                 c.name AS category_name, c.emoji AS category_emoji
             FROM products p
             JOIN categories c ON c.id = p.category_id
@@ -189,7 +191,7 @@ class CatalogRepository:
             """
             SELECT
                 p.id, p.category_id, p.name, p.brand, p.price, p.description,
-                p.photo_file_id, p.in_stock, p.position,
+                p.photo_file_id, p.in_stock, p.position, p.quantity, p.variant_type,
                 c.name AS category_name, c.emoji AS category_emoji
             FROM products p
             JOIN categories c ON c.id = p.category_id
@@ -225,8 +227,8 @@ class CatalogRepository:
             """
             INSERT INTO products(
                 category_id, name, brand, price, description,
-                photo_file_id, in_stock, position
-            ) VALUES (?, ?, ?, ?, ?, ?, 1, ?)
+                photo_file_id, in_stock, position, quantity, variant_type
+            ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, 1, 'none')
             """,
             (
                 category_id,
@@ -247,6 +249,8 @@ class CatalogRepository:
             "description",
             "photo_file_id",
             "category_id",
+            "quantity",
+            "variant_type",
         }
         if field not in allowed_fields:
             raise ValueError(f"Unsupported product field: {field}")
@@ -266,6 +270,38 @@ class CatalogRepository:
             "DELETE FROM products WHERE id = ?",
             (product_id,),
         )
+
+    async def set_product_quantity(self, product_id: int, quantity: int) -> None:
+        quantity = max(0, int(quantity))
+        await self._database.execute(
+            "UPDATE products SET quantity = ?, in_stock = CASE WHEN ? > 0 THEN 1 ELSE 0 END WHERE id = ?",
+            (quantity, quantity, product_id),
+        )
+
+    async def add_staff_admin(self, user_id: int) -> None:
+        await self._database.execute(
+            "INSERT OR IGNORE INTO staff_admins(user_id) VALUES (?)",
+            (user_id,),
+        )
+
+    async def remove_staff_admin(self, user_id: int) -> None:
+        await self._database.execute(
+            "DELETE FROM staff_admins WHERE user_id = ?",
+            (user_id,),
+        )
+
+    async def is_staff_admin(self, user_id: int) -> bool:
+        row = await self._database.fetchone(
+            "SELECT 1 FROM staff_admins WHERE user_id = ?",
+            (user_id,),
+        )
+        return row is not None
+
+    async def list_staff_admins(self) -> list[int]:
+        rows = await self._database.fetchall(
+            "SELECT user_id FROM staff_admins ORDER BY added_at ASC"
+        )
+        return [int(row["user_id"]) for row in rows]
 
     async def stats(self) -> CatalogStats:
         row = await self._database.fetchone(

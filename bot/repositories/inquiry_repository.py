@@ -7,7 +7,7 @@ from bot.models import Inquiry
 
 
 class InquiryRepository:
-    """Зберігає та отримує запити покупців щодо товарів."""
+    """Зберігає та отримує заявки покупців."""
 
     def __init__(self, database: Database) -> None:
         self._database = database
@@ -24,6 +24,8 @@ class InquiryRepository:
             product_price=str(row["product_price"]),
             status=str(row["status"]),
             created_at=str(row["created_at"]),
+            variant=str(row.get("variant", "")),
+            comment=str(row.get("comment", "")),
         )
 
     async def create(
@@ -33,24 +35,16 @@ class InquiryRepository:
         username: str | None,
         full_name: str,
         product_id: int,
+        variant: str = "",
+        comment: str = "",
     ) -> tuple[int, bool]:
-        existing = await self._database.fetchone(
-            """
-            SELECT id FROM inquiries
-            WHERE user_id = ? AND product_id = ? AND status = 'new'
-            ORDER BY id DESC LIMIT 1
-            """,
-            (user_id, product_id),
-        )
-        if existing:
-            return int(existing["id"]), False
-
         inquiry_id = await self._database.execute(
             """
-            INSERT INTO inquiries(user_id, username, full_name, product_id)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO inquiries(
+                user_id, username, full_name, product_id, variant, comment
+            ) VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (user_id, username, full_name, product_id),
+            (user_id, username, full_name, product_id, variant, comment),
         )
         return inquiry_id, True
 
@@ -59,7 +53,7 @@ class InquiryRepository:
             """
             SELECT
                 i.id, i.user_id, i.username, i.full_name, i.product_id,
-                i.status, i.created_at,
+                i.variant, i.comment, i.status, i.created_at,
                 p.name AS product_name, p.price AS product_price
             FROM inquiries i
             JOIN products p ON p.id = i.product_id
@@ -74,7 +68,7 @@ class InquiryRepository:
             """
             SELECT
                 i.id, i.user_id, i.username, i.full_name, i.product_id,
-                i.status, i.created_at,
+                i.variant, i.comment, i.status, i.created_at,
                 p.name AS product_name, p.price AS product_price
             FROM inquiries i
             JOIN products p ON p.id = i.product_id
