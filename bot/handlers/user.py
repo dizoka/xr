@@ -7,7 +7,7 @@ from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, Message, User
 
 from bot.core.constants import DEFAULT_SETTINGS, PRODUCTS_PER_PAGE
 from bot.keyboards import admin as admin_kb
@@ -51,8 +51,18 @@ class UserHandlers:
             F.text,
             ~F.text.startswith("/"),
         )
-        self.router.message.register(self.order_variant_message, UserOrderStates.variant, F.text)
-        self.router.message.register(self.order_comment_message, UserOrderStates.comment, F.text)
+        self.router.message.register(
+            self.order_variant_message,
+            UserOrderStates.variant,
+            F.text,
+            ~F.text.startswith("/"),
+        )
+        self.router.message.register(
+            self.order_comment_message,
+            UserOrderStates.comment,
+            F.text,
+            ~F.text.startswith("/"),
+        )
 
         self.router.callback_query.register(self.noop, F.data == "noop")
         self.router.callback_query.register(self.age_yes, F.data == "age:yes")
@@ -382,7 +392,14 @@ class UserHandlers:
             reply_markup=user_kb.order_comment_menu(),
         )
 
-    async def _finish_order(self, message: Message, state: FSMContext, bot: Bot, comment: str) -> None:
+    async def _finish_order(
+        self,
+        message: Message,
+        state: FSMContext,
+        bot: Bot,
+        comment: str,
+        customer: User,
+    ) -> None:
         data = await state.get_data()
         product_id = int(data.get("product_id", 0))
         variant = str(data.get("variant", "")).strip()
@@ -392,9 +409,9 @@ class UserHandlers:
             await message.answer("Цей товар уже недоступний.", reply_markup=user_kb.back_home())
             return
         inquiry_id, _ = await self.inquiries.create(
-            user_id=message.from_user.id,
-            username=message.from_user.username,
-            full_name=message.from_user.full_name,
+            user_id=customer.id,
+            username=customer.username,
+            full_name=customer.full_name,
             product_id=product_id,
             variant=variant,
             comment=comment.strip(),
@@ -427,12 +444,12 @@ class UserHandlers:
         if len(comment) > 500:
             await message.answer("Коментар має містити до 500 символів.")
             return
-        await self._finish_order(message, state, bot, comment)
+        await self._finish_order(message, state, bot, comment, message.from_user)
 
     async def order_skip_comment(self, callback: CallbackQuery, state: FSMContext, bot: Bot) -> None:
         await answer_callback_safely(callback)
         if callback.message:
-            await self._finish_order(callback.message, state, bot, "")
+            await self._finish_order(callback.message, state, bot, "", callback.from_user)
 
     async def order_cancel(self, callback: CallbackQuery, state: FSMContext) -> None:
         await state.clear()

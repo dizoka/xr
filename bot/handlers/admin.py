@@ -110,8 +110,16 @@ class AdminHandlers:
         value = (command.args or "").strip()
         return int(value) if value.isdigit() else None
 
-    async def add_staff_command(self, message: Message, command: CommandObject, is_owner_admin: bool = False) -> None:
+    async def add_staff_command(
+        self,
+        message: Message,
+        command: CommandObject,
+        state: FSMContext,
+        is_owner_admin: bool = False,
+    ) -> None:
+        await state.clear()
         if not is_owner_admin:
+            await message.answer("Керувати адміністраторами може лише власник бота.")
             return
         user_id = await self._resolve_staff_id(message, command)
         if user_id is None or user_id in self.owner_ids:
@@ -124,8 +132,16 @@ class AdminHandlers:
             "Керувати іншими адміністраторами може лише власник."
         )
 
-    async def remove_staff_command(self, message: Message, command: CommandObject, is_owner_admin: bool = False) -> None:
+    async def remove_staff_command(
+        self,
+        message: Message,
+        command: CommandObject,
+        state: FSMContext,
+        is_owner_admin: bool = False,
+    ) -> None:
+        await state.clear()
         if not is_owner_admin:
+            await message.answer("Керувати адміністраторами може лише власник бота.")
             return
         user_id = await self._resolve_staff_id(message, command)
         if user_id is None:
@@ -134,8 +150,15 @@ class AdminHandlers:
         await self.catalog.remove_staff_admin(user_id)
         await message.answer(f"✅ Доступ працівника <code>{user_id}</code> забрано.")
 
-    async def list_staff_command(self, message: Message, is_owner_admin: bool = False) -> None:
+    async def list_staff_command(
+        self,
+        message: Message,
+        state: FSMContext,
+        is_owner_admin: bool = False,
+    ) -> None:
+        await state.clear()
         if not is_owner_admin:
+            await message.answer("Переглядати список адміністраторів може лише власник бота.")
             return
         ids = await self.catalog.list_staff_admins()
         if not ids:
