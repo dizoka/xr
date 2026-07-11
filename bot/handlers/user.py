@@ -95,10 +95,15 @@ class UserHandlers:
             )
             return
 
+        promotions_url = await self._safe_setting("promotions_url")
         text = "<b>🛍 Каталог</b>\n\nОберіть категорію:"
         if not categories:
             text += "\n\nКатегорії поки не додані."
-        await replace_with_text(message, text, user_kb.categories_menu(categories))
+        await replace_with_text(
+            message,
+            text,
+            user_kb.categories_menu(categories, promotions_url),
+        )
 
     async def _show_age_gate(self, message: Message) -> None:
         warning = await self._safe_setting("age_warning")
@@ -149,9 +154,10 @@ class UserHandlers:
                 reply_markup=user_kb.fallback_menu(),
             )
             return
+        promotions_url = await self._safe_setting("promotions_url")
         await message.answer(
             "<b>🛍 Каталог</b>\n\nОберіть категорію:",
-            reply_markup=user_kb.categories_menu(categories),
+            reply_markup=user_kb.categories_menu(categories, promotions_url),
         )
 
     async def noop(self, callback: CallbackQuery) -> None:

@@ -592,7 +592,8 @@ class AdminHandlers:
             "<b>⚙️ Налаштування магазину</b>\n\n"
             f"Назва: {h(values.get('store_name', ''))}\n"
             f"Валюта: {h(values.get('currency', ''))}\n"
-            f"Посилання продавця: {h(values.get('contact_url', ''))}\n\n"
+            f"Посилання продавця: {h(values.get('contact_url', ''))}\n"
+            f"Посилання на акції: {h(values.get('promotions_url', 'Не задано')) or 'Не задано'}\n\n"
             "Оберіть параметр для зміни."
         )
         if callback.message:
@@ -606,6 +607,7 @@ class AdminHandlers:
             "welcome_text",
             "address_schedule",
             "contact_url",
+            "promotions_url",
             "currency",
             "age_warning",
         }
@@ -630,7 +632,7 @@ class AdminHandlers:
         if not value:
             await message.answer("Значення не може бути порожнім.")
             return
-        if key == "contact_url" and not value.startswith(("https://", "http://", "tg://")):
+        if key in {"contact_url", "promotions_url"} and not value.startswith(("https://", "http://", "tg://")):
             await message.answer("Посилання має починатися з https://, http:// або tg://")
             return
         await self.catalog.set_setting(key, value)
