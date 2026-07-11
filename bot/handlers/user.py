@@ -457,3 +457,14 @@ class UserHandlers:
         if callback.message:
             await self._show_home(callback.message)
 
+
+
+    async def unknown_user_button(self, callback: CallbackQuery, state: FSMContext) -> None:
+        """Безпечно обробляє застарілі або невідомі кнопки користувача."""
+        await state.clear()
+        await answer_callback_safely(
+            callback,
+            "Ця кнопка застаріла. Відкриваю головне меню.",
+        )
+        if callback.message:
+            await self._show_home(callback.message)
