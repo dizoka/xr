@@ -14,14 +14,14 @@ from bot.keyboards import admin as admin_kb
 from bot.keyboards import user as user_kb
 from bot.repositories.catalog_repository import CatalogRepository
 from bot.repositories.inquiry_repository import InquiryRepository
-from bot.states.user import UserSearchStates
+from bot.states.user import UserOrderStates, UserSearchStates
 from bot.utils.callbacks import (
     CallbackErrorMiddleware,
     answer_callback_safely,
     parse_callback_ints,
 )
 from bot.utils.messages import replace_with_photo_or_text, replace_with_text
-from bot.utils.text import h, inquiry_text, product_card_text
+from bot.utils.text import h, inquiry_text, product_card_text, product_title
 
 
 class UserHandlers:
@@ -44,12 +44,15 @@ class UserHandlers:
     def _register(self) -> None:
         self.router.message.register(self.start, CommandStart())
         self.router.message.register(self.catalog_command, Command("catalog"))
+        self.router.message.register(self.show_id, Command("id"))
         self.router.message.register(
             self.search_message,
             UserSearchStates.query,
             F.text,
             ~F.text.startswith("/"),
         )
+        self.router.message.register(self.order_variant_message, UserOrderStates.variant, F.text)
+        self.router.message.register(self.order_comment_message, UserOrderStates.comment, F.text)
 
         self.router.callback_query.register(self.noop, F.data == "noop")
         self.router.callback_query.register(self.age_yes, F.data == "age:yes")
@@ -60,7 +63,9 @@ class UserHandlers:
         self.router.callback_query.register(self.search_start, F.data == "u:search")
         self.router.callback_query.register(self.category, F.data.startswith("u:c:"))
         self.router.callback_query.register(self.product, F.data.startswith("u:p:"))
-        self.router.callback_query.register(self.inquiry, F.data.startswith("u:q:"))
+        self.router.callback_query.register(self.order_start, F.data.startswith("u:buy:"))
+        self.router.callback_query.register(self.order_skip_comment, F.data == "u:order:skip")
+        self.router.callback_query.register(self.order_cancel, F.data == "u:order:cancel")
         # Резервний обробник: жодна стара або помилкова кнопка u:* не зависає.
         self.router.callback_query.register(self.unknown_user_button, F.data.startswith("u:"))
 
@@ -139,6 +144,9 @@ class UserHandlers:
             return
         text, contact_url = await self._home_text()
         await message.answer(text, reply_markup=user_kb.main_menu(contact_url))
+
+    async def show_id(self, message: Message) -> None:
+        await message.answer(f"Ваш Telegram ID: <code>{message.from_user.id}</code>")
 
     async def catalog_command(self, message: Message, state: FSMContext) -> None:
         await state.clear()
@@ -324,32 +332,76 @@ class UserHandlers:
             reply_markup=user_kb.search_results(products, currency),
         )
 
-    async def inquiry(self, callback: CallbackQuery, bot: Bot) -> None:
-        # Закриваємо індикатор одразу; результат надсилаємо окремим повідомленням.
+    @staticmethod
+    def _variant_label(product) -> tuple[str, str]:
+        variant_type = (product.variant_type or "none").strip().casefold()
+        category = product.category_name.strip().casefold()
+        if variant_type == "none":
+            if "рід" in category or "жид" in category:
+                variant_type = "flavor"
+            elif "pod" in category or "систем" in category:
+                variant_type = "color"
+        labels = {
+            "flavor": ("смак", "Напишіть бажаний смак одним повідомленням."),
+            "color": ("колір", "Напишіть бажаний колір одним повідомленням."),
+            "strength": ("міцність", "Напишіть бажану міцність одним повідомленням."),
+            "other": ("варіант", "Напишіть бажаний варіант одним повідомленням."),
+        }
+        return labels.get(variant_type, ("варіант", "Напишіть потрібний варіант одним повідомленням."))
+
+    async def order_start(self, callback: CallbackQuery, state: FSMContext) -> None:
         await answer_callback_safely(callback)
         if not await self._ensure_callback_access(callback):
             return
-
-        parsed = parse_callback_ints(callback.data, "u:q:", 1)
-        if parsed is None:
-            if callback.message:
-                await callback.message.answer("Не вдалося визначити товар.")
+        parsed = parse_callback_ints(callback.data, "u:buy:", 1)
+        if parsed is None or not callback.message:
             return
-        product_id = parsed[0]
+        product = await self.catalog.get_product(parsed[0])
+        if product is None or not product.in_stock:
+            await callback.message.answer("Цей товар зараз недоступний.")
+            return
+        label, prompt = self._variant_label(product)
+        await state.set_state(UserOrderStates.variant)
+        await state.update_data(product_id=product.id, variant_label=label)
+        await callback.message.answer(
+            f"<b>🛒 {h(product_title(product))}</b>\n\n{h(prompt)}\n\n"
+            "Наприклад: <i>Зелене яблуко</i> або <i>Чорний</i>.",
+            reply_markup=user_kb.order_cancel_menu(),
+        )
+
+    async def order_variant_message(self, message: Message, state: FSMContext) -> None:
+        value = (message.text or "").strip()
+        if len(value) < 1 or len(value) > 120:
+            await message.answer("Напишіть короткий варіант до 120 символів.")
+            return
+        await state.update_data(variant=value)
+        await state.set_state(UserOrderStates.comment)
+        await message.answer(
+            "Додайте коментар до замовлення або натисніть «Без коментаря».\n\n"
+            "Наприклад: <i>Заберу сьогодні після 18:00</i>.",
+            reply_markup=user_kb.order_comment_menu(),
+        )
+
+    async def _finish_order(self, message: Message, state: FSMContext, bot: Bot, comment: str) -> None:
+        data = await state.get_data()
+        product_id = int(data.get("product_id", 0))
+        variant = str(data.get("variant", "")).strip()
         product = await self.catalog.get_product(product_id)
         if product is None or not product.in_stock:
-            if callback.message:
-                await callback.message.answer("Цей товар зараз недоступний.")
+            await state.clear()
+            await message.answer("Цей товар уже недоступний.", reply_markup=user_kb.back_home())
             return
-
-        inquiry_id, created = await self.inquiries.create(
-            user_id=callback.from_user.id,
-            username=callback.from_user.username,
-            full_name=callback.from_user.full_name,
+        inquiry_id, _ = await self.inquiries.create(
+            user_id=message.from_user.id,
+            username=message.from_user.username,
+            full_name=message.from_user.full_name,
             product_id=product_id,
+            variant=variant,
+            comment=comment.strip(),
         )
         inquiry = await self.inquiries.get(inquiry_id)
-        if created and inquiry is not None:
+        await state.clear()
+        if inquiry is not None:
             currency = await self._safe_setting("currency") or "грн"
             for admin_id in self.admin_ids:
                 try:
@@ -358,25 +410,31 @@ class UserHandlers:
                         inquiry_text(inquiry, currency),
                         reply_markup=admin_kb.inquiry_actions(inquiry.id, inquiry.user_id),
                     )
-                except (TelegramForbiddenError, TelegramBadRequest):
-                    continue
-
-        result_text = (
-            "✅ Запит надіслано продавцю. Вам напишуть у Telegram."
-            if created
-            else "ℹ️ Ваш запит щодо цього товару вже був надісланий продавцю."
+                except (TelegramBadRequest, TelegramForbiddenError):
+                    logging.exception("Не вдалося повідомити адміністратора %s", admin_id)
+        await message.answer(
+            "✅ <b>Заявку надіслано продавцю.</b>\n\n"
+            f"Товар: {h(product_title(product))}\n"
+            f"Ваш варіант: <b>{h(variant)}</b>\n\n"
+            "Продавець зв’яжеться з вами для підтвердження.",
+            reply_markup=user_kb.back_home(),
         )
+
+    async def order_comment_message(self, message: Message, state: FSMContext, bot: Bot) -> None:
+        comment = (message.text or "").strip()
+        if len(comment) > 500:
+            await message.answer("Коментар має містити до 500 символів.")
+            return
+        await self._finish_order(message, state, bot, comment)
+
+    async def order_skip_comment(self, callback: CallbackQuery, state: FSMContext, bot: Bot) -> None:
+        await answer_callback_safely(callback)
         if callback.message:
-            await callback.message.answer(result_text, reply_markup=user_kb.back_home())
+            await self._finish_order(callback.message, state, bot, "")
 
-    async def unknown_user_button(self, callback: CallbackQuery, state: FSMContext) -> None:
-        await answer_callback_safely(
-            callback,
-            "Кнопку оновлено. Відкриваю головне меню.",
-        )
+    async def order_cancel(self, callback: CallbackQuery, state: FSMContext) -> None:
         await state.clear()
+        await answer_callback_safely(callback, "Замовлення скасовано")
         if callback.message:
-            if await self._has_access(callback.from_user.id):
-                await self._show_home(callback.message)
-            else:
-                await self._replace_with_age_gate(callback.message)
+            await self._show_home(callback.message)
+
