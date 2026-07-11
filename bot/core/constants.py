@@ -10,6 +10,7 @@ DEFAULT_SETTINGS: dict[str, str] = {
         "Точну адресу уточнюйте у продавця."
     ),
     "contact_url": "https://t.me/USERNAME",
+    "promotions_url": "",
     "currency": "грн",
     "age_warning": (
         "🔞 Каталог призначений лише для повнолітніх користувачів.\n\n"
