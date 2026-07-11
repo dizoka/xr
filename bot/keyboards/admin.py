@@ -35,6 +35,7 @@ def categories_list(categories: list[Category]) -> InlineKeyboardMarkup:
 
 def category_actions(category: Category) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
+
     builder.button(text="✏️ Змінити назву", callback_data=f"a:catname:{category.id}")
     builder.button(text="😀 Змінити емодзі", callback_data=f"a:catemoji:{category.id}")
     builder.button(
@@ -43,6 +44,7 @@ def category_actions(category: Category) -> InlineKeyboardMarkup:
     )
     builder.button(text="🗑 Видалити", callback_data=f"a:catdel:{category.id}")
     builder.button(text="◀️ Категорії", callback_data="a:cats")
+    builder.button(text="🏠 Адмін", callback_data="a:home")
     builder.adjust(1)
     return builder.as_markup()
 
@@ -119,6 +121,18 @@ def admin_products_list(
     return builder.as_markup()
 
 
+
+def promotions_products_menu(category_id: int, has_url: bool) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="✏️ Змінити посилання" if has_url else "➕ Додати посилання",
+        callback_data="a:set:promotions_url",
+    )
+    builder.button(text="◀️ Категорії", callback_data="a:products")
+    builder.button(text="🏠 Адмін", callback_data="a:home")
+    builder.adjust(1, 2)
+    return builder.as_markup()
+
 def product_actions(product: Product, return_page: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="✏️ Назва", callback_data=f"a:pe:name:{product.id}")
@@ -156,7 +170,6 @@ def settings_menu() -> InlineKeyboardMarkup:
     builder.button(text="👋 Привітання", callback_data="a:set:welcome_text")
     builder.button(text="📍 Адреса та графік", callback_data="a:set:address_schedule")
     builder.button(text="💬 Посилання продавця", callback_data="a:set:contact_url")
-    builder.button(text="🔥 Посилання на акції", callback_data="a:set:promotions_url")
     builder.button(text="💵 Валюта", callback_data="a:set:currency")
     builder.button(text="🔞 Текст 18+", callback_data="a:set:age_warning")
     builder.button(text="◀️ Адмін-панель", callback_data="a:home")
