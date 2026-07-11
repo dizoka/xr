@@ -119,8 +119,8 @@ def product_menu(product: Product, return_page: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     if product.in_stock:
         builder.button(
-            text="📩 Дізнатися про наявність",
-            callback_data=f"u:q:{product.id}",
+            text="🛒 Обрати товар",
+            callback_data=f"u:buy:{product.id}",
         )
     builder.button(
         text="◀️ Назад до товарів",
@@ -155,4 +155,18 @@ def fallback_menu() -> InlineKeyboardMarkup:
     builder.button(text="🛍 Каталог", callback_data="u:catalog")
     builder.button(text="🏠 Головне меню", callback_data="u:home")
     builder.adjust(1)
+    return builder.as_markup()
+
+
+def order_comment_menu() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="⏭ Без коментаря", callback_data="u:order:skip")
+    builder.button(text="❌ Скасувати", callback_data="u:order:cancel")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def order_cancel_menu() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="❌ Скасувати", callback_data="u:order:cancel")
     return builder.as_markup()
