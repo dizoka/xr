@@ -1,13 +1,10 @@
 DEFAULT_SETTINGS: dict[str, str] = {
     "store_name": "CrystalStore | Ковель",
     "welcome_text": (
-        "Ласкаво просимо до каталогу CrystalStore.\n\n"
-        "Оберіть потрібний розділ нижче."
+        "Ласкаво просимо до каталогу CrystalStore.\n\nОберіть потрібний розділ нижче."
     ),
     "address_schedule": (
-        "📍 Ковель\n"
-        "🕒 Пн–Нд: 12:00–19:00\n\n"
-        "Точну адресу уточнюйте у продавця."
+        "📍 Ковель\n🕒 Пн–Нд: 12:00–19:00\n\nТочну адресу уточнюйте у продавця."
     ),
     "contact_url": "https://t.me/USERNAME",
     "promotions_url": "",

@@ -1,19 +1,27 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Iterable, Mapping, Sequence
-from typing import Any
+from typing import Any, TypeVar
 
 import libsql
 
 from bot.core.constants import DEFAULT_CATEGORIES, DEFAULT_SETTINGS
 
 
+logger = logging.getLogger(__name__)
 Row = Mapping[str, Any]
+T = TypeVar("T")
 
 
 class Database:
-    """Керує віддаленою SQLite-сумісною базою Turso."""
+    """Керує віддаленою SQLite-сумісною базою Turso.
+
+    Синхронний libsql виконується через ``asyncio.to_thread``, тому event loop
+    Telegram-бота не блокується. Один lock захищає спільне з'єднання від
+    одночасного доступу з різних worker threads.
+    """
 
     def __init__(self, database_url: str, auth_token: str) -> None:
         self._database_url = database_url
@@ -28,6 +36,9 @@ class Database:
         return self._connection
 
     async def connect(self) -> None:
+        if self._connection is not None:
+            return
+
         def _connect() -> Any:
             return libsql.connect(
                 database=self._database_url,
@@ -39,10 +50,20 @@ class Database:
         await self.execute("PRAGMA foreign_keys = ON")
 
     async def close(self) -> None:
-        if self._connection is not None:
+        if self._connection is None:
+            return
+        async with self._lock:
             connection = self._connection
             self._connection = None
             await asyncio.to_thread(connection.close)
+
+    async def ping(self) -> bool:
+        try:
+            row = await asyncio.wait_for(self.fetchone("SELECT 1 AS ok"), timeout=5)
+            return bool(row and int(row["ok"]) == 1)
+        except Exception:
+            logger.exception("Перевірка готовності Turso завершилася помилкою")
+            return False
 
     @staticmethod
     def _row_to_dict(cursor: Any, row: Sequence[Any] | None) -> dict[str, Any] | None:
@@ -64,7 +85,8 @@ class Database:
                 name TEXT NOT NULL,
                 emoji TEXT NOT NULL DEFAULT '📦',
                 position INTEGER NOT NULL DEFAULT 0,
-                active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0, 1))
+                active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0, 1)),
+                archived INTEGER NOT NULL DEFAULT 0 CHECK(archived IN (0, 1))
             );
 
             CREATE TABLE IF NOT EXISTS products (
@@ -79,6 +101,7 @@ class Database:
                 position INTEGER NOT NULL DEFAULT 0,
                 quantity INTEGER NOT NULL DEFAULT 1,
                 variant_type TEXT NOT NULL DEFAULT 'none',
+                archived INTEGER NOT NULL DEFAULT 0 CHECK(archived IN (0, 1)),
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY(category_id) REFERENCES categories(id) ON DELETE CASCADE
             );
@@ -94,8 +117,13 @@ class Database:
                 username TEXT,
                 full_name TEXT NOT NULL,
                 product_id INTEGER NOT NULL,
+                product_name_snapshot TEXT NOT NULL DEFAULT '',
+                product_price_snapshot TEXT NOT NULL DEFAULT '',
+                category_name_snapshot TEXT NOT NULL DEFAULT '',
+                variant_label_snapshot TEXT NOT NULL DEFAULT '',
                 variant TEXT NOT NULL DEFAULT '',
                 comment TEXT NOT NULL DEFAULT '',
+                request_key TEXT,
                 status TEXT NOT NULL DEFAULT 'new' CHECK(status IN ('new', 'done')),
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY(product_id) REFERENCES products(id) ON DELETE CASCADE
@@ -106,27 +134,166 @@ class Database:
                 added_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
 
-            CREATE INDEX IF NOT EXISTS idx_products_category
-                ON products(category_id, in_stock, position, id);
-            CREATE INDEX IF NOT EXISTS idx_inquiries_status
-                ON inquiries(status, created_at);
+            CREATE TABLE IF NOT EXISTS fsm_states (
+                bot_id INTEGER NOT NULL,
+                chat_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                thread_id INTEGER NOT NULL DEFAULT -1,
+                business_connection_id TEXT NOT NULL DEFAULT '',
+                destiny TEXT NOT NULL DEFAULT 'default',
+                state TEXT,
+                data TEXT NOT NULL DEFAULT '{}',
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY(
+                    bot_id, chat_id, user_id, thread_id,
+                    business_connection_id, destiny
+                )
+            );
         """
 
         async with self._lock:
+
             def _initialize() -> None:
                 self.connection.executescript(schema)
-                # Безпечні міграції для вже створеної Turso-бази.
-                columns = {row[1] for row in self.connection.execute("PRAGMA table_info(products)").fetchall()}
-                if "quantity" not in columns:
-                    self.connection.execute("ALTER TABLE products ADD COLUMN quantity INTEGER NOT NULL DEFAULT 1")
-                self.connection.execute("UPDATE products SET quantity = 1 WHERE in_stock = 1 AND quantity = 0")
-                if "variant_type" not in columns:
-                    self.connection.execute("ALTER TABLE products ADD COLUMN variant_type TEXT NOT NULL DEFAULT 'none'")
-                inquiry_columns = {row[1] for row in self.connection.execute("PRAGMA table_info(inquiries)").fetchall()}
-                if "variant" not in inquiry_columns:
-                    self.connection.execute("ALTER TABLE inquiries ADD COLUMN variant TEXT NOT NULL DEFAULT ''")
-                if "comment" not in inquiry_columns:
-                    self.connection.execute("ALTER TABLE inquiries ADD COLUMN comment TEXT NOT NULL DEFAULT ''")
+
+                category_columns = {
+                    str(row[1])
+                    for row in self.connection.execute(
+                        "PRAGMA table_info(categories)"
+                    ).fetchall()
+                }
+                if "archived" not in category_columns:
+                    self.connection.execute(
+                        "ALTER TABLE categories ADD COLUMN archived INTEGER NOT NULL DEFAULT 0"
+                    )
+
+                product_columns = {
+                    str(row[1])
+                    for row in self.connection.execute(
+                        "PRAGMA table_info(products)"
+                    ).fetchall()
+                }
+                if "quantity" not in product_columns:
+                    self.connection.execute(
+                        "ALTER TABLE products ADD COLUMN quantity INTEGER NOT NULL DEFAULT 1"
+                    )
+                if "variant_type" not in product_columns:
+                    self.connection.execute(
+                        "ALTER TABLE products ADD COLUMN variant_type TEXT NOT NULL DEFAULT 'none'"
+                    )
+                if "archived" not in product_columns:
+                    self.connection.execute(
+                        "ALTER TABLE products ADD COLUMN archived INTEGER NOT NULL DEFAULT 0"
+                    )
+                self.connection.execute(
+                    "UPDATE products SET quantity = 1 WHERE in_stock = 1 AND quantity = 0"
+                )
+
+                inquiry_columns = {
+                    str(row[1])
+                    for row in self.connection.execute(
+                        "PRAGMA table_info(inquiries)"
+                    ).fetchall()
+                }
+                migrations = {
+                    "variant": "ALTER TABLE inquiries ADD COLUMN variant TEXT NOT NULL DEFAULT ''",
+                    "comment": "ALTER TABLE inquiries ADD COLUMN comment TEXT NOT NULL DEFAULT ''",
+                    "product_name_snapshot": (
+                        "ALTER TABLE inquiries ADD COLUMN product_name_snapshot TEXT NOT NULL DEFAULT ''"
+                    ),
+                    "product_price_snapshot": (
+                        "ALTER TABLE inquiries ADD COLUMN product_price_snapshot TEXT NOT NULL DEFAULT ''"
+                    ),
+                    "category_name_snapshot": (
+                        "ALTER TABLE inquiries ADD COLUMN category_name_snapshot TEXT NOT NULL DEFAULT ''"
+                    ),
+                    "variant_label_snapshot": (
+                        "ALTER TABLE inquiries ADD COLUMN variant_label_snapshot TEXT NOT NULL DEFAULT ''"
+                    ),
+                    "request_key": "ALTER TABLE inquiries ADD COLUMN request_key TEXT",
+                }
+                for column, statement in migrations.items():
+                    if column not in inquiry_columns:
+                        self.connection.execute(statement)
+
+                # Заповнюємо snapshot для старих заявок без ручної міграції Turso.
+                self.connection.execute(
+                    """
+                    UPDATE inquiries
+                    SET product_name_snapshot = COALESCE(
+                            NULLIF(product_name_snapshot, ''),
+                            (SELECT p.name FROM products p WHERE p.id = inquiries.product_id),
+                            'Видалений товар'
+                        ),
+                        product_price_snapshot = COALESCE(
+                            NULLIF(product_price_snapshot, ''),
+                            (SELECT p.price FROM products p WHERE p.id = inquiries.product_id),
+                            '—'
+                        ),
+                        category_name_snapshot = COALESCE(
+                            NULLIF(category_name_snapshot, ''),
+                            (
+                                SELECT c.name
+                                FROM products p
+                                JOIN categories c ON c.id = p.category_id
+                                WHERE p.id = inquiries.product_id
+                            ),
+                            ''
+                        )
+                    """
+                )
+
+                # Старі товари отримують явний тип варіанта за поточною категорією.
+                self.connection.execute(
+                    """
+                    UPDATE products
+                    SET variant_type = 'color'
+                    WHERE COALESCE(variant_type, 'none') IN ('', 'none')
+                      AND category_id IN (
+                          SELECT id FROM categories
+                          WHERE lower(name) LIKE '%pod%'
+                             OR name LIKE '%ПОД%'
+                             OR name LIKE '%Под%'
+                             OR name LIKE '%под%'
+                             OR name LIKE '%Систем%'
+                             OR name LIKE '%систем%'
+                      )
+                    """
+                )
+                self.connection.execute(
+                    """
+                    UPDATE products
+                    SET variant_type = 'flavor'
+                    WHERE COALESCE(variant_type, 'none') IN ('', 'none')
+                      AND category_id IN (
+                          SELECT id FROM categories
+                          WHERE name LIKE '%Рід%'
+                             OR name LIKE '%рід%'
+                             OR name LIKE '%Жид%'
+                             OR name LIKE '%жид%'
+                             OR lower(name) LIKE '%liquid%'
+                             OR lower(name) LIKE '%juice%'
+                      )
+                    """
+                )
+
+                self.connection.executescript(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_products_category
+                        ON products(category_id, archived, in_stock, position, id);
+                    CREATE INDEX IF NOT EXISTS idx_inquiries_status
+                        ON inquiries(status, created_at);
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_inquiries_request_key
+                        ON inquiries(request_key)
+                        WHERE request_key IS NOT NULL;
+                    CREATE INDEX IF NOT EXISTS idx_fsm_updated_at
+                        ON fsm_states(updated_at);
+                    """
+                )
+                # Незавершені сценарії старші двох діб більше не потрібні.
+                self.connection.execute(
+                    "DELETE FROM fsm_states WHERE updated_at < datetime('now', '-2 days')"
+                )
                 self.connection.commit()
 
             await asyncio.to_thread(_initialize)
@@ -136,6 +303,7 @@ class Database:
 
     async def _seed_defaults(self) -> None:
         async with self._lock:
+
             def _seed() -> None:
                 for key, value in DEFAULT_SETTINGS.items():
                     self.connection.execute(
@@ -147,7 +315,9 @@ class Database:
                     "SELECT COUNT(*) FROM categories"
                 ).fetchone()
                 if row and int(row[0]) == 0:
-                    for position, (name, emoji) in enumerate(DEFAULT_CATEGORIES, start=1):
+                    for position, (name, emoji) in enumerate(
+                        DEFAULT_CATEGORIES, start=1
+                    ):
                         self.connection.execute(
                             """
                             INSERT INTO categories(name, emoji, position, active)
@@ -162,17 +332,20 @@ class Database:
     async def _migrate_ukrainian_defaults(self) -> None:
         setting_migrations = {
             "welcome_text": {
-                "Добро пожаловать в каталог CrystalStore.\n\nВыберите нужный раздел ниже.":
-                    DEFAULT_SETTINGS["welcome_text"],
+                "Добро пожаловать в каталог CrystalStore.\n\nВыберите нужный раздел ниже.": DEFAULT_SETTINGS[
+                    "welcome_text"
+                ],
             },
             "address_schedule": {
-                "📍 Ковель\n🕒 Пн–Нд: 12:00–19:00\n\nТочный адрес уточняйте у продавца.":
-                    DEFAULT_SETTINGS["address_schedule"],
+                "📍 Ковель\n🕒 Пн–Нд: 12:00–19:00\n\nТочный адрес уточняйте у продавца.": DEFAULT_SETTINGS[
+                    "address_schedule"
+                ],
             },
             "age_warning": {
                 "🔞 Каталог предназначен только для совершеннолетних пользователей.\n\n"
-                "Нажимая кнопку ниже, вы подтверждаете, что вам исполнилось 18 лет.":
-                    DEFAULT_SETTINGS["age_warning"],
+                "Нажимая кнопку ниже, вы подтверждаете, что вам исполнилось 18 лет.": DEFAULT_SETTINGS[
+                    "age_warning"
+                ],
             },
         }
         category_migrations = {
@@ -183,6 +356,7 @@ class Database:
         }
 
         async with self._lock:
+
             def _migrate() -> None:
                 for key, values in setting_migrations.items():
                     for old_value, new_value in values.items():
@@ -199,12 +373,9 @@ class Database:
 
             await asyncio.to_thread(_migrate)
 
-    async def execute(
-        self,
-        query: str,
-        parameters: Sequence[Any] = (),
-    ) -> int:
+    async def execute(self, query: str, parameters: Sequence[Any] = ()) -> int:
         async with self._lock:
+
             def _execute() -> int:
                 cursor = self.connection.execute(query, tuple(parameters))
                 self.connection.commit()
@@ -219,6 +390,7 @@ class Database:
     ) -> None:
         values = [tuple(row) for row in parameters]
         async with self._lock:
+
             def _executemany() -> None:
                 self.connection.executemany(query, values)
                 self.connection.commit()
@@ -230,26 +402,43 @@ class Database:
         query: str,
         parameters: Sequence[Any] = (),
     ) -> Row | None:
-        async with self._lock:
-            def _fetchone() -> Row | None:
-                cursor = self.connection.execute(query, tuple(parameters))
-                row = cursor.fetchone()
-                return self._row_to_dict(cursor, row)
-
-            return await asyncio.to_thread(_fetchone)
+        return await self._read_with_retry(self._fetchone_sync, query, parameters)
 
     async def fetchall(
         self,
         query: str,
         parameters: Sequence[Any] = (),
     ) -> list[Row]:
-        async with self._lock:
-            def _fetchall() -> list[Row]:
-                cursor = self.connection.execute(query, tuple(parameters))
-                rows = cursor.fetchall()
-                return [
-                    self._row_to_dict(cursor, row) or {}
-                    for row in rows
-                ]
+        return await self._read_with_retry(self._fetchall_sync, query, parameters)
 
-            return await asyncio.to_thread(_fetchall)
+    async def _read_with_retry(
+        self,
+        operation: Any,
+        query: str,
+        parameters: Sequence[Any],
+    ) -> Any:
+        delay = 0.25
+        for attempt in range(3):
+            try:
+                async with self._lock:
+                    return await asyncio.to_thread(operation, query, tuple(parameters))
+            except Exception:
+                if attempt >= 2:
+                    raise
+                logger.warning(
+                    "Тимчасова помилка читання Turso, повтор %s/3",
+                    attempt + 2,
+                    exc_info=True,
+                )
+                await asyncio.sleep(delay)
+                delay *= 2
+        raise RuntimeError("Недосяжний код")
+
+    def _fetchone_sync(self, query: str, parameters: Sequence[Any]) -> Row | None:
+        cursor = self.connection.execute(query, tuple(parameters))
+        return self._row_to_dict(cursor, cursor.fetchone())
+
+    def _fetchall_sync(self, query: str, parameters: Sequence[Any]) -> list[Row]:
+        cursor = self.connection.execute(query, tuple(parameters))
+        rows = cursor.fetchall()
+        return [self._row_to_dict(cursor, row) or {} for row in rows]

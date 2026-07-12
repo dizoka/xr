@@ -16,5 +16,7 @@ services:
         sync: false
       - key: TURSO_AUTH_TOKEN
         sync: false
+      - key: WEBHOOK_SECRET
+        generateValue: true
       - key: PYTHONUNBUFFERED
         value: "1"

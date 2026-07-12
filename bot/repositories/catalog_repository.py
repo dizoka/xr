@@ -1,16 +1,20 @@
 from __future__ import annotations
 
+from time import monotonic
 from typing import Any
 
 from bot.db.database import Database
-from bot.models import Category, Product, CatalogStats
+from bot.models import CatalogStats, Category, Product
 
 
 class CatalogRepository:
-    """Виконує операції збереження налаштувань, категорій і товарів."""
+    """Операції з налаштуваннями, категоріями, товарами та ролями."""
+
+    _SETTINGS_TTL_SECONDS = 45.0
 
     def __init__(self, database: Database) -> None:
         self._database = database
+        self._settings_cache: dict[str, tuple[str, float]] = {}
 
     @staticmethod
     def _category_from_row(row: Any) -> Category:
@@ -41,11 +45,18 @@ class CatalogRepository:
         )
 
     async def get_setting(self, key: str, default: str = "") -> str:
+        now = monotonic()
+        cached = self._settings_cache.get(key)
+        if cached and cached[1] > now:
+            return cached[0]
+
         row = await self._database.fetchone(
             "SELECT value FROM settings WHERE key = ?",
             (key,),
         )
-        return str(row["value"]) if row else default
+        value = str(row["value"]) if row else default
+        self._settings_cache[key] = (value, now + self._SETTINGS_TTL_SECONDS)
+        return value
 
     async def set_setting(self, key: str, value: str) -> None:
         await self._database.execute(
@@ -55,14 +66,22 @@ class CatalogRepository:
             """,
             (key, value),
         )
+        self._settings_cache[key] = (
+            value,
+            monotonic() + self._SETTINGS_TTL_SECONDS,
+        )
 
     async def get_all_settings(self) -> dict[str, str]:
         rows = await self._database.fetchall("SELECT key, value FROM settings")
-        return {str(row["key"]): str(row["value"]) for row in rows}
+        values = {str(row["key"]): str(row["value"]) for row in rows}
+        expires_at = monotonic() + self._SETTINGS_TTL_SECONDS
+        for key, value in values.items():
+            self._settings_cache[key] = (value, expires_at)
+        return values
 
     async def is_age_confirmed(self, user_id: int) -> bool:
         row = await self._database.fetchone(
-            "SELECT 1 FROM age_confirmations WHERE user_id = ?",
+            "SELECT 1 AS ok FROM age_confirmations WHERE user_id = ?",
             (user_id,),
         )
         return row is not None
@@ -72,19 +91,18 @@ class CatalogRepository:
             """
             INSERT INTO age_confirmations(user_id, confirmed_at)
             VALUES (?, CURRENT_TIMESTAMP)
-            ON CONFLICT(user_id) DO UPDATE SET
-                confirmed_at = CURRENT_TIMESTAMP
+            ON CONFLICT(user_id) DO UPDATE SET confirmed_at = CURRENT_TIMESTAMP
             """,
             (user_id,),
         )
 
     async def list_categories(self, include_inactive: bool = False) -> list[Category]:
-        where = "" if include_inactive else "WHERE active = 1"
+        active_filter = "" if include_inactive else "AND active = 1"
         rows = await self._database.fetchall(
             f"""
             SELECT id, name, emoji, position, active
             FROM categories
-            {where}
+            WHERE archived = 0 {active_filter}
             ORDER BY position ASC, id ASC
             """
         )
@@ -94,7 +112,8 @@ class CatalogRepository:
         row = await self._database.fetchone(
             """
             SELECT id, name, emoji, position, active
-            FROM categories WHERE id = ?
+            FROM categories
+            WHERE id = ? AND archived = 0
             """,
             (category_id,),
         )
@@ -107,40 +126,59 @@ class CatalogRepository:
         position = int(row["next_position"]) if row else 1
         return await self._database.execute(
             """
-            INSERT INTO categories(name, emoji, position, active)
-            VALUES (?, ?, ?, 1)
+            INSERT INTO categories(name, emoji, position, active, archived)
+            VALUES (?, ?, ?, 1, 0)
             """,
             (name, emoji, position),
         )
 
     async def update_category_name(self, category_id: int, name: str) -> None:
         await self._database.execute(
-            "UPDATE categories SET name = ? WHERE id = ?",
+            "UPDATE categories SET name = ? WHERE id = ? AND archived = 0",
             (name, category_id),
         )
 
     async def update_category_emoji(self, category_id: int, emoji: str) -> None:
         await self._database.execute(
-            "UPDATE categories SET emoji = ? WHERE id = ?",
+            "UPDATE categories SET emoji = ? WHERE id = ? AND archived = 0",
             (emoji, category_id),
         )
 
     async def toggle_category(self, category_id: int) -> None:
         await self._database.execute(
-            "UPDATE categories SET active = CASE active WHEN 1 THEN 0 ELSE 1 END WHERE id = ?",
+            """
+            UPDATE categories
+            SET active = CASE active WHEN 1 THEN 0 ELSE 1 END
+            WHERE id = ? AND archived = 0
+            """,
             (category_id,),
         )
 
     async def delete_category(self, category_id: int) -> None:
+        # М'яке видалення зберігає старі замовлення та зв'язки в базі.
         await self._database.execute(
-            "DELETE FROM categories WHERE id = ?",
+            "UPDATE categories SET archived = 1, active = 0 WHERE id = ?",
+            (category_id,),
+        )
+        await self._database.execute(
+            """
+            UPDATE products
+            SET archived = 1, in_stock = 0, quantity = 0
+            WHERE category_id = ?
+            """,
             (category_id,),
         )
 
-    async def count_products(self, category_id: int, only_in_stock: bool = False) -> int:
-        stock_filter = "AND in_stock = 1" if only_in_stock else ""
+    async def count_products(
+        self, category_id: int, only_in_stock: bool = False
+    ) -> int:
+        stock_filter = "AND in_stock = 1 AND quantity > 0" if only_in_stock else ""
         row = await self._database.fetchone(
-            f"SELECT COUNT(*) AS total FROM products WHERE category_id = ? {stock_filter}",
+            f"""
+            SELECT COUNT(*) AS total
+            FROM products
+            WHERE category_id = ? AND archived = 0 {stock_filter}
+            """,
             (category_id,),
         )
         return int(row["total"]) if row else 0
@@ -153,7 +191,7 @@ class CatalogRepository:
         offset: int,
         only_in_stock: bool = False,
     ) -> list[Product]:
-        stock_filter = "AND p.in_stock = 1" if only_in_stock else ""
+        stock_filter = "AND p.in_stock = 1 AND p.quantity > 0" if only_in_stock else ""
         rows = await self._database.fetchall(
             f"""
             SELECT
@@ -162,7 +200,10 @@ class CatalogRepository:
                 c.name AS category_name, c.emoji AS category_emoji
             FROM products p
             JOIN categories c ON c.id = p.category_id
-            WHERE p.category_id = ? {stock_filter}
+            WHERE p.category_id = ?
+              AND p.archived = 0
+              AND c.archived = 0
+              {stock_filter}
             ORDER BY p.position ASC, p.id ASC
             LIMIT ? OFFSET ?
             """,
@@ -179,7 +220,7 @@ class CatalogRepository:
                 c.name AS category_name, c.emoji AS category_emoji
             FROM products p
             JOIN categories c ON c.id = p.category_id
-            WHERE p.id = ?
+            WHERE p.id = ? AND p.archived = 0 AND c.archived = 0
             """,
             (product_id,),
         )
@@ -196,7 +237,10 @@ class CatalogRepository:
             FROM products p
             JOIN categories c ON c.id = p.category_id
             WHERE c.active = 1
+              AND c.archived = 0
+              AND p.archived = 0
               AND p.in_stock = 1
+              AND p.quantity > 0
               AND (p.name LIKE ? COLLATE NOCASE OR p.brand LIKE ? COLLATE NOCASE)
             ORDER BY p.position ASC, p.id ASC
             LIMIT ?
@@ -214,6 +258,7 @@ class CatalogRepository:
         price: str,
         description: str,
         photo_file_id: str | None,
+        variant_type: str = "none",
     ) -> int:
         row = await self._database.fetchone(
             """
@@ -227,8 +272,8 @@ class CatalogRepository:
             """
             INSERT INTO products(
                 category_id, name, brand, price, description,
-                photo_file_id, in_stock, position, quantity, variant_type
-            ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, 1, 'none')
+                photo_file_id, in_stock, position, quantity, variant_type, archived
+            ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, 1, ?, 0)
             """,
             (
                 category_id,
@@ -238,10 +283,13 @@ class CatalogRepository:
                 description,
                 photo_file_id,
                 position,
+                variant_type,
             ),
         )
 
-    async def update_product_field(self, product_id: int, field: str, value: Any) -> None:
+    async def update_product_field(
+        self, product_id: int, field: str, value: Any
+    ) -> None:
         allowed_fields = {
             "name",
             "brand",
@@ -255,26 +303,39 @@ class CatalogRepository:
         if field not in allowed_fields:
             raise ValueError(f"Unsupported product field: {field}")
         await self._database.execute(
-            f"UPDATE products SET {field} = ? WHERE id = ?",
+            f"UPDATE products SET {field} = ? WHERE id = ? AND archived = 0",
             (value, product_id),
         )
 
     async def toggle_product_stock(self, product_id: int) -> None:
         await self._database.execute(
-            "UPDATE products SET in_stock = CASE in_stock WHEN 1 THEN 0 ELSE 1 END WHERE id = ?",
+            """
+            UPDATE products
+            SET in_stock = CASE in_stock WHEN 1 THEN 0 ELSE 1 END
+            WHERE id = ? AND archived = 0
+            """,
             (product_id,),
         )
 
     async def delete_product(self, product_id: int) -> None:
+        # М'яке видалення не знищує заявки через ON DELETE CASCADE.
         await self._database.execute(
-            "DELETE FROM products WHERE id = ?",
+            """
+            UPDATE products
+            SET archived = 1, in_stock = 0, quantity = 0
+            WHERE id = ?
+            """,
             (product_id,),
         )
 
     async def set_product_quantity(self, product_id: int, quantity: int) -> None:
         quantity = max(0, int(quantity))
         await self._database.execute(
-            "UPDATE products SET quantity = ?, in_stock = CASE WHEN ? > 0 THEN 1 ELSE 0 END WHERE id = ?",
+            """
+            UPDATE products
+            SET quantity = ?, in_stock = CASE WHEN ? > 0 THEN 1 ELSE 0 END
+            WHERE id = ? AND archived = 0
+            """,
             (quantity, quantity, product_id),
         )
 
@@ -292,7 +353,7 @@ class CatalogRepository:
 
     async def is_staff_admin(self, user_id: int) -> bool:
         row = await self._database.fetchone(
-            "SELECT 1 FROM staff_admins WHERE user_id = ?",
+            "SELECT 1 AS ok FROM staff_admins WHERE user_id = ?",
             (user_id,),
         )
         return row is not None
@@ -307,9 +368,12 @@ class CatalogRepository:
         row = await self._database.fetchone(
             """
             SELECT
-                (SELECT COUNT(*) FROM categories) AS categories,
-                (SELECT COUNT(*) FROM products) AS products,
-                (SELECT COUNT(*) FROM products WHERE in_stock = 1) AS in_stock,
+                (SELECT COUNT(*) FROM categories WHERE archived = 0) AS categories,
+                (SELECT COUNT(*) FROM products WHERE archived = 0) AS products,
+                (
+                    SELECT COUNT(*) FROM products
+                    WHERE archived = 0 AND in_stock = 1 AND quantity > 0
+                ) AS in_stock,
                 (SELECT COUNT(*) FROM inquiries WHERE status = 'new') AS open_inquiries
             """
         )

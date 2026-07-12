@@ -7,4 +7,3 @@ class UserSearchStates(StatesGroup):
 
 class UserOrderStates(StatesGroup):
     variant = State()
-    comment = State()

@@ -15,6 +15,7 @@ class AddProductStates(StatesGroup):
     brand = State()
     price = State()
     description = State()
+    variant_type = State()
     photo = State()
 
 

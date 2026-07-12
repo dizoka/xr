@@ -19,7 +19,6 @@ def main_menu() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-
 def staff_main_menu() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="📦 Товари", callback_data="a:products")
@@ -31,7 +30,9 @@ def staff_main_menu() -> InlineKeyboardMarkup:
 def staff_product_actions(product: Product, return_page: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="💰 Змінити ціну", callback_data=f"a:pe:price:{product.id}")
-    builder.button(text="📦 Змінити кількість", callback_data=f"a:pe:quantity:{product.id}")
+    builder.button(
+        text="📦 Змінити кількість", callback_data=f"a:pe:quantity:{product.id}"
+    )
     builder.button(
         text="⛔ Немає в наявності" if product.in_stock else "✅ Є в наявності",
         callback_data=f"a:ptoggle:{product.id}:{return_page}",
@@ -42,6 +43,7 @@ def staff_product_actions(product: Product, return_page: int) -> InlineKeyboardM
     )
     builder.adjust(1)
     return builder.as_markup()
+
 
 def categories_list(categories: list[Category]) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
@@ -93,20 +95,27 @@ def product_categories(categories: list[Category]) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-
 def staff_product_categories(categories: list[Category]) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for category in categories:
         if category.name.strip().casefold() == "акції":
             continue
-        builder.button(text=f"{category.emoji} {category.name}", callback_data=f"a:plist:{category.id}:0")
+        builder.button(
+            text=f"{category.emoji} {category.name}",
+            callback_data=f"a:plist:{category.id}:0",
+        )
     builder.button(text="◀️ Панель працівника", callback_data="a:home")
     builder.adjust(2, 1)
     return builder.as_markup()
 
 
 def staff_products_list(
-    products: list[Product], *, category_id: int, page: int, total_pages: int, currency: str
+    products: list[Product],
+    *,
+    category_id: int,
+    page: int,
+    total_pages: int,
+    currency: str,
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for product in products:
@@ -118,15 +127,26 @@ def staff_products_list(
     builder.adjust(1)
     navigation: list[InlineKeyboardButton] = []
     if page > 0:
-        navigation.append(InlineKeyboardButton(text="◀️", callback_data=f"a:plist:{category_id}:{page-1}"))
+        navigation.append(
+            InlineKeyboardButton(
+                text="◀️", callback_data=f"a:plist:{category_id}:{page - 1}"
+            )
+        )
     if total_pages > 1:
-        navigation.append(InlineKeyboardButton(text=f"{page+1}/{total_pages}", callback_data="noop"))
+        navigation.append(
+            InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="noop")
+        )
     if page + 1 < total_pages:
-        navigation.append(InlineKeyboardButton(text="▶️", callback_data=f"a:plist:{category_id}:{page+1}"))
+        navigation.append(
+            InlineKeyboardButton(
+                text="▶️", callback_data=f"a:plist:{category_id}:{page + 1}"
+            )
+        )
     if navigation:
         builder.row(*navigation)
     builder.row(InlineKeyboardButton(text="◀️ Категорії", callback_data="a:products"))
     return builder.as_markup()
+
 
 def admin_products_list(
     products: list[Product],
@@ -180,7 +200,6 @@ def admin_products_list(
     return builder.as_markup()
 
 
-
 def promotions_products_menu(category_id: int, has_url: bool) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(
@@ -191,7 +210,6 @@ def promotions_products_menu(category_id: int, has_url: bool) -> InlineKeyboardM
     builder.button(text="🏠 Адмін", callback_data="a:home")
     builder.adjust(1, 2)
     return builder.as_markup()
-
 
 
 def cartridges_products_menu(category_id: int, has_url: bool) -> InlineKeyboardMarkup:
@@ -205,6 +223,7 @@ def cartridges_products_menu(category_id: int, has_url: bool) -> InlineKeyboardM
     builder.adjust(1, 2)
     return builder.as_markup()
 
+
 def product_actions(product: Product, return_page: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="✏️ Назва", callback_data=f"a:pe:name:{product.id}")
@@ -212,17 +231,22 @@ def product_actions(product: Product, return_page: int) -> InlineKeyboardMarkup:
     builder.button(text="💰 Ціна", callback_data=f"a:pe:price:{product.id}")
     builder.button(text="📦 Кількість", callback_data=f"a:pe:quantity:{product.id}")
     builder.button(text="📝 Опис", callback_data=f"a:pe:description:{product.id}")
+    builder.button(
+        text="🎛 Тип варіанта", callback_data=f"a:pe:variant_type:{product.id}"
+    )
     builder.button(text="🖼 Фото", callback_data=f"a:pe:photo_file_id:{product.id}")
     builder.button(
-        text="⛔ Приховати" if product.in_stock else "✅ Повернути до каталогу",
+        text="⛔ Немає в наявності" if product.in_stock else "✅ Є в наявності",
         callback_data=f"a:ptoggle:{product.id}:{return_page}",
     )
-    builder.button(text="🗑 Видалити", callback_data=f"a:pdel:{product.id}:{return_page}")
+    builder.button(
+        text="🗑 Видалити", callback_data=f"a:pdel:{product.id}:{return_page}"
+    )
     builder.button(
         text="◀️ До товарів",
         callback_data=f"a:plist:{product.category_id}:{return_page}",
     )
-    builder.adjust(2, 2, 1, 1, 1, 1)
+    builder.adjust(2, 2, 2, 1, 1, 1)
     return builder.as_markup()
 
 
@@ -268,6 +292,41 @@ def inquiry_actions(inquiry_id: int, user_id: int) -> InlineKeyboardMarkup:
     builder.button(text="✅ Опрацьовано", callback_data=f"a:reqdone:{inquiry_id}")
     builder.button(text="◀️ Запити", callback_data="a:reqs")
     builder.adjust(1)
+    return builder.as_markup()
+
+
+def variant_type_step(suggested: str = "none") -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    options = [
+        ("🎨 Колір", "color"),
+        ("💧 Смак", "flavor"),
+        ("📝 Інший варіант", "custom"),
+        ("➖ Не запитувати", "none"),
+    ]
+    for text, value in options:
+        prefix = "✅ " if value == suggested else ""
+        builder.button(text=prefix + text, callback_data=f"a:vtypeadd:{value}")
+    builder.button(text="❌ Скасувати", callback_data="a:cancel")
+    builder.adjust(2, 2, 1)
+    return builder.as_markup()
+
+
+def variant_type_edit(product_id: int, current: str) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    options = [
+        ("🎨 Колір", "color"),
+        ("💧 Смак", "flavor"),
+        ("📝 Інший варіант", "custom"),
+        ("➖ Не запитувати", "none"),
+    ]
+    for text, value in options:
+        prefix = "✅ " if value == current else ""
+        builder.button(
+            text=prefix + text,
+            callback_data=f"a:vtypeedit:{product_id}:{value}",
+        )
+    builder.button(text="❌ Скасувати", callback_data="a:cancel")
+    builder.adjust(2, 2, 1)
     return builder.as_markup()
 
 

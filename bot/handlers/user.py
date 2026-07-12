@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import logging
 import math
+from uuid import uuid4
 
 from aiogram import Bot, F, Router
-from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
+from aiogram.enums import ChatAction
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message, User
@@ -12,8 +13,15 @@ from aiogram.types import CallbackQuery, Message, User
 from bot.core.constants import DEFAULT_SETTINGS, PRODUCTS_PER_PAGE
 from bot.keyboards import admin as admin_kb
 from bot.keyboards import user as user_kb
+from bot.middlewares.rate_limit import RateLimitMiddleware
 from bot.repositories.catalog_repository import CatalogRepository
 from bot.repositories.inquiry_repository import InquiryRepository
+from bot.services import (
+    DuplicateOrderError,
+    NotificationService,
+    OrderService,
+    ProductUnavailableError,
+)
 from bot.states.user import UserOrderStates, UserSearchStates
 from bot.utils.callbacks import (
     CallbackErrorMiddleware,
@@ -21,7 +29,18 @@ from bot.utils.callbacks import (
     parse_callback_ints,
 )
 from bot.utils.messages import replace_with_photo_or_text, replace_with_text
-from bot.utils.text import h, inquiry_text, product_card_text, product_title
+from bot.utils.product_types import order_profile
+from bot.utils.text import (
+    customer_order_text,
+    h,
+    inquiry_text,
+    product_card_text,
+    product_title,
+)
+from bot.utils.ttl_cache import TTLCache
+
+
+logger = logging.getLogger(__name__)
 
 
 class UserHandlers:
@@ -32,18 +51,25 @@ class UserHandlers:
         catalog: CatalogRepository,
         inquiries: InquiryRepository,
         admin_ids: frozenset[int],
+        bot: Bot,
     ) -> None:
         self.catalog = catalog
         self.inquiries = inquiries
         self.admin_ids = admin_ids
-        self._session_age_confirmations: set[int] = set()
+        self.bot = bot
+        self.order_service = OrderService(catalog, inquiries)
+        self.notifications = NotificationService(bot)
+        self._age_cache = TTLCache[int](ttl_seconds=15 * 60, max_size=5_000)
         self.router = Router(name="user")
+        self.router.message.middleware(RateLimitMiddleware(limit=8, period=5))
+        self.router.callback_query.middleware(RateLimitMiddleware(limit=12, period=5))
         self.router.callback_query.middleware(CallbackErrorMiddleware())
         self._register()
 
     def _register(self) -> None:
         self.router.message.register(self.start, CommandStart())
         self.router.message.register(self.catalog_command, Command("catalog"))
+        self.router.message.register(self.help_command, Command("help"))
         self.router.message.register(self.show_id, Command("id"))
         self.router.message.register(
             self.search_message,
@@ -57,34 +83,34 @@ class UserHandlers:
             F.text,
             ~F.text.startswith("/"),
         )
-        self.router.message.register(
-            self.order_comment_message,
-            UserOrderStates.comment,
-            F.text,
-            ~F.text.startswith("/"),
-        )
 
         self.router.callback_query.register(self.noop, F.data == "noop")
         self.router.callback_query.register(self.age_yes, F.data == "age:yes")
         self.router.callback_query.register(self.age_no, F.data == "age:no")
         self.router.callback_query.register(self.home, F.data == "u:home")
-        self.router.callback_query.register(self.catalog_callback, F.data == "u:catalog")
+        self.router.callback_query.register(
+            self.catalog_callback, F.data == "u:catalog"
+        )
         self.router.callback_query.register(self.info, F.data == "u:info")
         self.router.callback_query.register(self.search_start, F.data == "u:search")
         self.router.callback_query.register(self.category, F.data.startswith("u:c:"))
         self.router.callback_query.register(self.product, F.data.startswith("u:p:"))
-        self.router.callback_query.register(self.order_start, F.data.startswith("u:buy:"))
-        self.router.callback_query.register(self.order_skip_comment, F.data == "u:order:skip")
-        self.router.callback_query.register(self.order_cancel, F.data == "u:order:cancel")
-        # Резервний обробник: жодна стара або помилкова кнопка u:* не зависає.
-        self.router.callback_query.register(self.unknown_user_button, F.data.startswith("u:"))
+        self.router.callback_query.register(
+            self.order_start, F.data.startswith("u:buy:")
+        )
+        self.router.callback_query.register(
+            self.order_cancel, F.data == "u:order:cancel"
+        )
+        self.router.callback_query.register(
+            self.unknown_user_button, F.data.startswith("u:")
+        )
 
     async def _safe_setting(self, key: str) -> str:
         default = DEFAULT_SETTINGS.get(key, "")
         try:
             return await self.catalog.get_setting(key, default)
         except Exception:
-            logging.exception("Не вдалося отримати налаштування %s", key)
+            logger.exception("Не вдалося отримати налаштування %s", key)
             return default
 
     async def _home_text(self) -> tuple[str, str]:
@@ -102,7 +128,7 @@ class UserHandlers:
         try:
             categories = await self.catalog.list_categories()
         except Exception:
-            logging.exception("Не вдалося завантажити категорії")
+            logger.exception("Не вдалося завантажити категорії")
             await replace_with_text(
                 message,
                 "<b>🛍 Каталог</b>\n\nНе вдалося завантажити категорії. Спробуйте ще раз.",
@@ -130,15 +156,17 @@ class UserHandlers:
         await replace_with_text(message, h(warning), user_kb.age_confirmation())
 
     async def _has_access(self, user_id: int) -> bool:
-        if user_id in self._session_age_confirmations:
+        if self._age_cache.contains(user_id):
             return True
         try:
             confirmed = await self.catalog.is_age_confirmed(user_id)
         except Exception:
-            logging.exception("Не вдалося перевірити підтвердження віку user_id=%s", user_id)
+            logger.exception(
+                "Не вдалося перевірити підтвердження віку user_id=%s", user_id
+            )
             return False
         if confirmed:
-            self._session_age_confirmations.add(user_id)
+            self._age_cache.add(user_id)
         return confirmed
 
     async def _ensure_callback_access(self, callback: CallbackQuery) -> bool:
@@ -150,34 +178,48 @@ class UserHandlers:
 
     async def start(self, message: Message, state: FSMContext) -> None:
         await state.clear()
+        if message.from_user is None:
+            return
         if not await self._has_access(message.from_user.id):
             await self._show_age_gate(message)
             return
         text, contact_url = await self._home_text()
         await message.answer(text, reply_markup=user_kb.main_menu(contact_url))
 
+    async def help_command(self, message: Message) -> None:
+        await message.answer(
+            "<b>❓ Допомога</b>\n\n"
+            "🛍 /catalog — відкрити каталог\n"
+            "🔎 Пошук доступний у головному меню\n"
+            "🆔 /id — показати ваш Telegram ID\n"
+            "🏠 /start — повернутися на головну\n\n"
+            "Щоб замовити товар, відкрийте його картку та натисніть "
+            "«🛒 Обрати товар»."
+        )
+
     async def show_id(self, message: Message) -> None:
-        await message.answer(f"Ваш Telegram ID: <code>{message.from_user.id}</code>")
+        if message.from_user:
+            await message.answer(
+                f"Ваш Telegram ID: <code>{message.from_user.id}</code>"
+            )
 
     async def catalog_command(self, message: Message, state: FSMContext) -> None:
         await state.clear()
+        if message.from_user is None:
+            return
         if not await self._has_access(message.from_user.id):
             await self._show_age_gate(message)
             return
-        try:
-            categories = await self.catalog.list_categories()
-        except Exception:
-            logging.exception("Не вдалося завантажити каталог за командою /catalog")
-            await message.answer(
-                "<b>🛍 Каталог</b>\n\nНе вдалося завантажити категорії. Спробуйте ще раз.",
-                reply_markup=user_kb.fallback_menu(),
-            )
-            return
+        categories = await self.catalog.list_categories()
         promotions_url = await self._safe_setting("promotions_url")
         cartridges_url = await self._safe_setting("cartridges_url")
         await message.answer(
             "<b>🛍 Каталог</b>\n\nОберіть категорію:",
-            reply_markup=user_kb.categories_menu(categories, promotions_url, cartridges_url),
+            reply_markup=user_kb.categories_menu(
+                categories,
+                promotions_url,
+                cartridges_url,
+            ),
         )
 
     async def noop(self, callback: CallbackQuery) -> None:
@@ -186,20 +228,21 @@ class UserHandlers:
     async def age_yes(self, callback: CallbackQuery, state: FSMContext) -> None:
         await answer_callback_safely(callback)
         await state.clear()
-
         user_id = callback.from_user.id
-        self._session_age_confirmations.add(user_id)
+        self._age_cache.add(user_id)
         try:
             await self.catalog.confirm_age(user_id)
         except Exception:
-            logging.exception("Не вдалося зберегти підтвердження віку user_id=%s", user_id)
-
+            logger.exception(
+                "Не вдалося зберегти підтвердження віку user_id=%s", user_id
+            )
         if callback.message:
             await self._show_catalog(callback.message)
 
     async def age_no(self, callback: CallbackQuery, state: FSMContext) -> None:
         await answer_callback_safely(callback)
         await state.clear()
+        self._age_cache.discard(callback.from_user.id)
         if callback.message:
             await replace_with_text(
                 callback.message,
@@ -207,7 +250,6 @@ class UserHandlers:
             )
 
     async def home(self, callback: CallbackQuery, state: FSMContext) -> None:
-        # Відповідаємо Telegram одразу, щоб кнопка не зависала після сну Render.
         await answer_callback_safely(callback)
         await state.clear()
         if not await self._ensure_callback_access(callback):
@@ -215,8 +257,11 @@ class UserHandlers:
         if callback.message:
             await self._show_home(callback.message)
 
-    async def catalog_callback(self, callback: CallbackQuery) -> None:
+    async def catalog_callback(
+        self, callback: CallbackQuery, state: FSMContext
+    ) -> None:
         await answer_callback_safely(callback)
+        await state.clear()
         if not await self._ensure_callback_access(callback):
             return
         if callback.message:
@@ -236,9 +281,7 @@ class UserHandlers:
 
     async def category(self, callback: CallbackQuery) -> None:
         await answer_callback_safely(callback)
-        if not await self._ensure_callback_access(callback):
-            return
-        if not callback.message:
+        if not await self._ensure_callback_access(callback) or not callback.message:
             return
 
         parsed = parse_callback_ints(callback.data, "u:c:", 2)
@@ -263,7 +306,9 @@ class UserHandlers:
             only_in_stock=True,
         )
         currency = await self._safe_setting("currency") or "грн"
-        empty_text = "\n\nУ цій категорії поки немає доступних товарів." if not products else ""
+        empty_text = (
+            "\n\nУ цій категорії поки немає доступних товарів." if not products else ""
+        )
         text = f"<b>{h(category.emoji)} {h(category.name)}</b>{empty_text}\n\nОберіть товар:"
         await replace_with_text(
             callback.message,
@@ -277,11 +322,9 @@ class UserHandlers:
             ),
         )
 
-    async def product(self, callback: CallbackQuery, bot: Bot) -> None:
+    async def product(self, callback: CallbackQuery) -> None:
         await answer_callback_safely(callback)
-        if not await self._ensure_callback_access(callback):
-            return
-        if not callback.message:
+        if not await self._ensure_callback_access(callback) or not callback.message:
             return
 
         parsed = parse_callback_ints(callback.data, "u:p:", 2)
@@ -289,20 +332,21 @@ class UserHandlers:
             await self._show_catalog(callback.message)
             return
         product_id, return_page = parsed
-        return_page = max(0, return_page)
-
         product = await self.catalog.get_product(product_id)
-        if product is None or not product.in_stock:
+        if product is None or not product.in_stock or product.quantity <= 0:
             await self._show_catalog(callback.message)
             return
 
         currency = await self._safe_setting("currency") or "грн"
+        contact_url = await self._safe_setting("contact_url")
         await replace_with_photo_or_text(
-            bot,
+            self.bot,
             callback.message,
             text=product_card_text(product, currency),
             photo_file_id=product.photo_file_id,
-            reply_markup=user_kb.product_menu(product, return_page),
+            reply_markup=user_kb.product_menu(
+                product, max(0, return_page), contact_url
+            ),
         )
 
     async def search_start(self, callback: CallbackQuery, state: FSMContext) -> None:
@@ -319,6 +363,8 @@ class UserHandlers:
             )
 
     async def search_message(self, message: Message, state: FSMContext) -> None:
+        if message.from_user is None:
+            return
         if not await self._has_access(message.from_user.id):
             await state.clear()
             await self._show_age_gate(message)
@@ -329,6 +375,7 @@ class UserHandlers:
             await message.answer("Введіть щонайменше 2 символи.")
             return
 
+        await self.bot.send_chat_action(message.chat.id, ChatAction.TYPING)
         products = await self.catalog.search_products(query)
         currency = await self._safe_setting("currency") or "грн"
         await state.clear()
@@ -344,23 +391,6 @@ class UserHandlers:
             reply_markup=user_kb.search_results(products, currency),
         )
 
-    @staticmethod
-    def _variant_label(product) -> tuple[str, str]:
-        variant_type = (product.variant_type or "none").strip().casefold()
-        category = product.category_name.strip().casefold()
-        if variant_type == "none":
-            if "рід" in category or "жид" in category:
-                variant_type = "flavor"
-            elif "pod" in category or "систем" in category:
-                variant_type = "color"
-        labels = {
-            "flavor": ("смак", "Напишіть бажаний смак одним повідомленням."),
-            "color": ("колір", "Напишіть бажаний колір одним повідомленням."),
-            "strength": ("міцність", "Напишіть бажану міцність одним повідомленням."),
-            "other": ("варіант", "Напишіть бажаний варіант одним повідомленням."),
-        }
-        return labels.get(variant_type, ("варіант", "Напишіть потрібний варіант одним повідомленням."))
-
     async def order_start(self, callback: CallbackQuery, state: FSMContext) -> None:
         await answer_callback_safely(callback)
         if not await self._ensure_callback_access(callback):
@@ -368,94 +398,110 @@ class UserHandlers:
         parsed = parse_callback_ints(callback.data, "u:buy:", 1)
         if parsed is None or not callback.message:
             return
+
         product = await self.catalog.get_product(parsed[0])
-        if product is None or not product.in_stock:
+        if product is None or not product.in_stock or product.quantity <= 0:
             await callback.message.answer("Цей товар зараз недоступний.")
             return
-        label, prompt = self._variant_label(product)
-        await state.set_state(UserOrderStates.variant)
-        await state.update_data(product_id=product.id, variant_label=label)
-        await callback.message.answer(
-            f"<b>🛒 {h(product_title(product))}</b>\n\n{h(prompt)}\n\n"
-            "Наприклад: <i>Зелене яблуко</i> або <i>Чорний</i>.",
-            reply_markup=user_kb.order_cancel_menu(),
+
+        await state.clear()
+        profile = order_profile(product)
+        await state.update_data(
+            product_id=product.id,
+            variant_label=profile.variant_label or "",
+            request_key=uuid4().hex,
         )
 
+        if profile.variant_prompt:
+            await state.set_state(UserOrderStates.variant)
+            await callback.message.answer(
+                f"<b>🛒 {h(product_title(product))}</b>\n\n{h(profile.variant_prompt)}",
+                reply_markup=user_kb.order_cancel_menu(),
+            )
+            return
+
+        await state.update_data(variant="")
+        await self._finish_order(callback.message, state, callback.from_user)
+
     async def order_variant_message(self, message: Message, state: FSMContext) -> None:
-        value = (message.text or "").strip()
-        if len(value) < 1 or len(value) > 120:
-            await message.answer("Напишіть короткий варіант до 120 символів.")
+        if message.from_user is None:
+            return
+        value = " ".join((message.text or "").strip().split())
+        data = await state.get_data()
+        variant_label = str(data.get("variant_label", "Варіант")) or "Варіант"
+        if len(value) < 2:
+            await message.answer(
+                f"{h(variant_label)} має містити щонайменше 2 символи."
+            )
+            return
+        if len(value) > 80:
+            await message.answer(
+                f"{h(variant_label)} має містити не більше 80 символів."
+            )
             return
         await state.update_data(variant=value)
-        await state.set_state(UserOrderStates.comment)
-        await message.answer(
-            "Додайте коментар до замовлення або натисніть «Без коментаря».\n\n"
-            "Наприклад: <i>Заберу сьогодні після 18:00</i>.",
-            reply_markup=user_kb.order_comment_menu(),
-        )
+        await self._finish_order(message, state, message.from_user)
 
     async def _finish_order(
         self,
         message: Message,
         state: FSMContext,
-        bot: Bot,
-        comment: str,
         customer: User,
     ) -> None:
         data = await state.get_data()
         product_id = int(data.get("product_id", 0))
         variant = str(data.get("variant", "")).strip()
-        product = await self.catalog.get_product(product_id)
-        if product is None or not product.in_stock:
+        variant_label = str(data.get("variant_label", "")).strip()
+        request_key = str(data.get("request_key") or uuid4().hex)
+
+        try:
+            result = await self.order_service.create_order(
+                user_id=customer.id,
+                username=customer.username,
+                full_name=customer.full_name,
+                product_id=product_id,
+                variant_label=variant_label,
+                variant=variant,
+                request_key=request_key,
+            )
+        except ProductUnavailableError:
             await state.clear()
-            await message.answer("Цей товар уже недоступний.", reply_markup=user_kb.back_home())
+            await message.answer(
+                "Цей товар уже недоступний.",
+                reply_markup=user_kb.back_home(),
+            )
             return
-        inquiry_id, _ = await self.inquiries.create(
-            user_id=customer.id,
-            username=customer.username,
-            full_name=customer.full_name,
-            product_id=product_id,
-            variant=variant,
-            comment=comment.strip(),
-        )
-        inquiry = await self.inquiries.get(inquiry_id)
+        except DuplicateOrderError:
+            await state.clear()
+            await message.answer(
+                "Ваше замовлення вже прийнято. Не потрібно натискати кнопку повторно.",
+                reply_markup=user_kb.back_home(),
+            )
+            return
+
         await state.clear()
-        if inquiry is not None:
-            currency = await self._safe_setting("currency") or "грн"
+        currency = await self._safe_setting("currency") or "грн"
+        if result.created:
             staff_ids = await self.catalog.list_staff_admins()
             recipients = set(self.admin_ids) | set(staff_ids)
-            for admin_id in recipients:
-                try:
-                    await bot.send_message(
-                        admin_id,
-                        inquiry_text(inquiry, currency),
-                        reply_markup=admin_kb.inquiry_actions(inquiry.id, inquiry.user_id),
-                    )
-                except (TelegramBadRequest, TelegramForbiddenError):
-                    logging.exception("Не вдалося повідомити адміністратора %s", admin_id)
+            await self.notifications.send_many(
+                recipients,
+                inquiry_text(result.inquiry, currency),
+                reply_markup=admin_kb.inquiry_actions(
+                    result.inquiry.id,
+                    result.inquiry.user_id,
+                ),
+            )
+
+        contact_url = await self._safe_setting("contact_url")
         await message.answer(
-            "✅ <b>Заявку надіслано продавцю.</b>\n\n"
-            f"Товар: {h(product_title(product))}\n"
-            f"Ваш варіант: <b>{h(variant)}</b>\n\n"
-            "Продавець зв’яжеться з вами для підтвердження.",
-            reply_markup=user_kb.back_home(),
+            customer_order_text(result.product, currency, variant),
+            reply_markup=user_kb.order_ready_menu(contact_url),
         )
 
-    async def order_comment_message(self, message: Message, state: FSMContext, bot: Bot) -> None:
-        comment = (message.text or "").strip()
-        if len(comment) > 500:
-            await message.answer("Коментар має містити до 500 символів.")
-            return
-        await self._finish_order(message, state, bot, comment, message.from_user)
-
-    async def order_skip_comment(self, callback: CallbackQuery, state: FSMContext, bot: Bot) -> None:
-        await answer_callback_safely(callback)
-        if callback.message:
-            await self._finish_order(callback.message, state, bot, "", callback.from_user)
-
-
-    async def unknown_user_button(self, callback: CallbackQuery, state: FSMContext) -> None:
-        """Обробляє старі або невідомі кнопки користувача без падіння бота."""
+    async def unknown_user_button(
+        self, callback: CallbackQuery, state: FSMContext
+    ) -> None:
         await answer_callback_safely(
             callback,
             "Кнопку оновлено. Відкриваю головне меню.",
@@ -471,4 +517,3 @@ class UserHandlers:
         await answer_callback_safely(callback, "Замовлення скасовано")
         if callback.message:
             await self._show_home(callback.message)
-

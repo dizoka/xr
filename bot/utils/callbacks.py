@@ -24,11 +24,13 @@ async def answer_callback_safely(
         pass
 
 
-def parse_callback_ints(data: str | None, prefix: str, amount: int) -> tuple[int, ...] | None:
+def parse_callback_ints(
+    data: str | None, prefix: str, amount: int
+) -> tuple[int, ...] | None:
     """Безпечно розбирає callback виду ``prefix:1:2``."""
     if not data or not data.startswith(prefix):
         return None
-    tail = data[len(prefix):]
+    tail = data[len(prefix) :]
     parts = tail.split(":") if tail else []
     if len(parts) != amount:
         return None

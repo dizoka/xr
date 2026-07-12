@@ -38,9 +38,11 @@ class Inquiry:
     product_id: int
     product_name: str
     product_price: str
+    category_name: str
     status: str
     created_at: str
     variant: str = ""
+    variant_label: str = ""
     comment: str = ""
 
 

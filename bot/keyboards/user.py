@@ -10,7 +10,7 @@ from bot.utils.text import product_title
 
 
 def _safe_contact_url(value: str | None) -> str | None:
-    """Повертає лише придатне для Telegram посилання без пробілів і переносів."""
+    """Повертає лише придатне для Telegram посилання."""
     if not value:
         return None
     url = value.strip()
@@ -39,11 +39,9 @@ def main_menu(contact_url: str = "") -> InlineKeyboardMarkup:
     builder.button(text="🛍 Каталог", callback_data="u:catalog")
     builder.button(text="🔎 Пошук", callback_data="u:search")
     builder.button(text="📍 Адреса та графік", callback_data="u:info")
-
     safe_url = _safe_contact_url(contact_url)
     if safe_url:
         builder.button(text="💬 Зв’язатися з продавцем", url=safe_url)
-
     builder.adjust(2, 1, 1)
     return builder.as_markup()
 
@@ -60,13 +58,11 @@ def categories_menu(
         category_name = category.name.strip().casefold()
         if category_name == "акції" and safe_promotions_url:
             builder.button(
-                text=f"{category.emoji} {category.name}",
-                url=safe_promotions_url,
+                text=f"{category.emoji} {category.name}", url=safe_promotions_url
             )
         elif category_name in {"картриджі", "картриджи"} and safe_cartridges_url:
             builder.button(
-                text=f"{category.emoji} {category.name}",
-                url=safe_cartridges_url,
+                text=f"{category.emoji} {category.name}", url=safe_cartridges_url
             )
         else:
             builder.button(
@@ -89,7 +85,10 @@ def products_menu(
     builder = InlineKeyboardBuilder()
     for product in products:
         builder.button(
-            text=f"{product_title(product)} — {product.price} {currency}",
+            text=(
+                f"{product_title(product)} — {product.price} {currency} "
+                f"• {product.quantity} шт."
+            ),
             callback_data=f"u:p:{product.id}:{page}",
         )
     builder.adjust(1)
@@ -98,8 +97,7 @@ def products_menu(
     if page > 0:
         navigation.append(
             InlineKeyboardButton(
-                text="◀️",
-                callback_data=f"u:c:{category_id}:{page - 1}",
+                text="◀️", callback_data=f"u:c:{category_id}:{page - 1}"
             )
         )
     if total_pages > 1:
@@ -109,8 +107,7 @@ def products_menu(
     if page + 1 < total_pages:
         navigation.append(
             InlineKeyboardButton(
-                text="▶️",
-                callback_data=f"u:c:{category_id}:{page + 1}",
+                text="▶️", callback_data=f"u:c:{category_id}:{page + 1}"
             )
         )
     if navigation:
@@ -123,13 +120,17 @@ def products_menu(
     return builder.as_markup()
 
 
-def product_menu(product: Product, return_page: int) -> InlineKeyboardMarkup:
+def product_menu(
+    product: Product,
+    return_page: int,
+    contact_url: str = "",
+) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    if product.in_stock:
-        builder.button(
-            text="🛒 Обрати товар",
-            callback_data=f"u:buy:{product.id}",
-        )
+    if product.in_stock and product.quantity > 0:
+        builder.button(text="🛒 Обрати товар", callback_data=f"u:buy:{product.id}")
+    safe_url = _safe_contact_url(contact_url)
+    if safe_url:
+        builder.button(text="💬 Написати продавцю", url=safe_url)
     builder.button(
         text="◀️ Назад до товарів",
         callback_data=f"u:c:{product.category_id}:{return_page}",
@@ -143,10 +144,24 @@ def search_results(products: list[Product], currency: str) -> InlineKeyboardMark
     builder = InlineKeyboardBuilder()
     for product in products:
         builder.button(
-            text=f"{product_title(product)} — {product.price} {currency}",
+            text=(
+                f"{product_title(product)} — {product.price} {currency} "
+                f"• {product.quantity} шт."
+            ),
             callback_data=f"u:p:{product.id}:0",
         )
     builder.button(text="🔎 Новий пошук", callback_data="u:search")
+    builder.button(text="🏠 Головне меню", callback_data="u:home")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def order_ready_menu(contact_url: str = "") -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    safe_url = _safe_contact_url(contact_url)
+    if safe_url:
+        builder.button(text="💬 Написати продавцю", url=safe_url)
+    builder.button(text="🛍 Продовжити покупки", callback_data="u:catalog")
     builder.button(text="🏠 Головне меню", callback_data="u:home")
     builder.adjust(1)
     return builder.as_markup()
@@ -162,14 +177,6 @@ def fallback_menu() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="🛍 Каталог", callback_data="u:catalog")
     builder.button(text="🏠 Головне меню", callback_data="u:home")
-    builder.adjust(1)
-    return builder.as_markup()
-
-
-def order_comment_menu() -> InlineKeyboardMarkup:
-    builder = InlineKeyboardBuilder()
-    builder.button(text="⏭ Без коментаря", callback_data="u:order:skip")
-    builder.button(text="❌ Скасувати", callback_data="u:order:cancel")
     builder.adjust(1)
     return builder.as_markup()
 

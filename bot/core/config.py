@@ -43,7 +43,9 @@ class Settings:
                 if value.strip()
             )
         except ValueError as exc:
-            raise ConfigError("ADMIN_IDS має містити числові Telegram ID через кому.") from exc
+            raise ConfigError(
+                "ADMIN_IDS має містити числові Telegram ID через кому."
+            ) from exc
 
         if not admin_ids:
             raise ConfigError("Потрібно вказати щонайменше один ADMIN_IDS.")

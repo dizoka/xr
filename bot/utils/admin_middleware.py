@@ -10,11 +10,7 @@ from bot.repositories.catalog_repository import CatalogRepository
 
 
 class AdminOnlyMiddleware(BaseMiddleware):
-    """Надає власнику та виданим адміністраторам повний доступ до панелі."""
-
-    # Працівники з виданою адмінкою мають повний доступ до інтерфейсу.
-    # Команди керування іншими адміністраторами все одно доступні лише власнику.
-
+    """Надає власнику та виданим адміністраторам доступ до панелі."""
 
     def __init__(self, owner_ids: frozenset[int], catalog: CatalogRepository) -> None:
         self._owner_ids = owner_ids
@@ -35,23 +31,15 @@ class AdminOnlyMiddleware(BaseMiddleware):
         data["is_owner_admin"] = is_owner
         data["is_staff_admin"] = is_staff
 
-        if is_owner:
+        if is_owner or is_staff:
             return await handler(event, data)
-
-        if is_staff:
-            if isinstance(event, Message):
-                # Доступ до /admin та всіх кроків FSM у повній адмін-панелі.
-                if event.text and event.text.startswith("/admin"):
-                    return await handler(event, data)
-                if data.get("raw_state"):
-                    return await handler(event, data)
-            elif isinstance(event, CallbackQuery):
-                # Повний доступ до всіх кнопок адмін-панелі.
-                if (event.data or "").startswith("a:"):
-                    return await handler(event, data)
 
         if isinstance(event, CallbackQuery):
             await event.answer("Немає доступу до цієї дії", show_alert=True)
-        elif isinstance(event, Message) and event.text and event.text.startswith("/admin"):
+        elif (
+            isinstance(event, Message)
+            and event.text
+            and event.text.startswith("/admin")
+        ):
             await event.answer("У вас немає доступу до адмін-панелі.")
         return None

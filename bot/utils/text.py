@@ -3,6 +3,7 @@ from __future__ import annotations
 from html import escape
 
 from bot.models import Inquiry, Product
+from bot.utils.product_types import order_profile, variant_type_title
 
 
 def h(value: object) -> str:
@@ -15,20 +16,31 @@ def product_title(product: Product) -> str:
 
 
 def product_card_text(product: Product, currency: str) -> str:
-    status = "✅ У наявності" if product.in_stock else "❌ Немає в наявності"
-    description = h(product.description) if product.description else "Опис поки не додано."
+    available = product.in_stock and product.quantity > 0
+    status = "✅ Є в наявності" if available else "❌ Немає в наявності"
+    description = (
+        h(product.description)
+        if product.description
+        else "Опис товару уточнюйте у продавця."
+    )
+    left = f"{max(0, product.quantity)} шт." if available else "0 шт."
     return (
         f"<b>{h(product.category_emoji)} {h(product_title(product))}</b>\n\n"
         f"{description}\n\n"
-        f"💰 <b>{h(product.price)} {h(currency)}</b>\n"
-        f"{status}\n"
-        f"📦 Кількість: <b>{product.quantity}</b>\n\n"
-        "🔞 Продаж лише повнолітнім. Продавець може перевірити вік."
+        f"💰 <b>Ціна:</b> {h(product.price)} {h(currency)}\n"
+        f"📦 <b>Залишок:</b> {left}\n"
+        f"{status}\n\n"
+        "🔞 <i>Продаж здійснюється лише повнолітнім. "
+        "Продавець може попросити підтвердити вік.</i>"
     )
 
 
 def admin_product_text(product: Product, currency: str) -> str:
-    status = "✅ У наявності" if product.in_stock else "⛔ Приховано з каталогу"
+    status = (
+        "✅ У наявності"
+        if product.in_stock and product.quantity > 0
+        else "❌ Немає в наявності"
+    )
     photo = "✅ Є" if product.photo_file_id else "— Немає"
     return (
         f"<b>Товар #{product.id}</b>\n\n"
@@ -38,6 +50,7 @@ def admin_product_text(product: Product, currency: str) -> str:
         f"Ціна: <b>{h(product.price)} {h(currency)}</b>\n"
         f"Статус: {status}\n"
         f"Кількість: <b>{product.quantity}</b>\n"
+        f"Параметр замовлення: <b>{h(variant_type_title(product.variant_type))}</b>\n"
         f"Фото: {photo}\n\n"
         f"Опис:\n{h(product.description or '—')}"
     )
@@ -45,14 +58,53 @@ def admin_product_text(product: Product, currency: str) -> str:
 
 def inquiry_text(inquiry: Inquiry, currency: str) -> str:
     username = f"@{h(inquiry.username)}" if inquiry.username else "не вказано"
+    variant_label = inquiry.variant_label.strip() or "Варіант"
+    emoji = (
+        "🎨"
+        if variant_label.casefold() == "колір"
+        else "💧"
+        if variant_label.casefold() == "смак"
+        else "🔹"
+    )
+    variant_line = (
+        f"{emoji} {h(variant_label)}: <b>{h(inquiry.variant)}</b>\n"
+        if inquiry.variant
+        else ""
+    )
+    comment_line = (
+        f"💬 Коментар: <b>{h(inquiry.comment)}</b>\n" if inquiry.comment else ""
+    )
     return (
-        f"<b>Новий запит #{inquiry.id}</b>\n\n"
-        f"Товар: <b>{h(inquiry.product_name)}</b>\n"
-        f"Ціна: {h(inquiry.product_price)} {h(currency)}\n"
-        f"Варіант: <b>{h(inquiry.variant or '—')}</b>\n"
-        f"Коментар: {h(inquiry.comment or '—')}\n\n"
-        f"Покупець: <a href=\"tg://user?id={inquiry.user_id}\">{h(inquiry.full_name)}</a>\n"
+        f"<b>🛒 Нове замовлення #{inquiry.id}</b>\n\n"
+        f"📦 Товар: <b>{h(inquiry.product_name)}</b>\n"
+        f"💰 Ціна: <b>{h(inquiry.product_price)} {h(currency)}</b>\n"
+        f"{variant_line}"
+        f"{comment_line}\n"
+        f'👤 Покупець: <a href="tg://user?id={inquiry.user_id}">{h(inquiry.full_name)}</a>\n'
         f"Username: {username}\n"
         f"Telegram ID: <code>{inquiry.user_id}</code>\n"
-        f"Створено: {h(inquiry.created_at)}"
+        f"🕒 Створено: {h(inquiry.created_at)}"
     )
+
+
+def customer_order_text(product: Product, currency: str, variant: str = "") -> str:
+    profile = order_profile(product)
+    lines = [
+        "<b>✅ Замовлення сформовано</b>",
+        "",
+        f"📦 {h(profile.product_label)}: <b>{h(product_title(product))}</b>",
+        f"💰 Ціна: <b>{h(product.price)} {h(currency)}</b>",
+    ]
+    if variant and profile.variant_label:
+        lines.append(
+            f"{profile.variant_emoji or '🔹'} {h(profile.variant_label)}: <b>{h(variant)}</b>"
+        )
+    lines.extend(
+        [
+            "",
+            "🔞 Продаж здійснюється лише повнолітнім.",
+            "",
+            "Натисніть кнопку нижче, щоб написати продавцю та уточнити деталі.",
+        ]
+    )
+    return "\n".join(lines)

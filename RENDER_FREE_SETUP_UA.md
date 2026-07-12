@@ -71,7 +71,7 @@ libsql://crystalstore-назваакаунта.turso.io
 
 Токен доступу до бази Turso.
 
-`WEBHOOK_SECRET (необов’язково)` додавати не потрібно — бот сам створює безпечний секрет.
+`WEBHOOK_SECRET` Render створить автоматично.
 
 5. Натисніть **Apply** або **Deploy Blueprint**.
 6. Дочекайтеся повідомлення в Logs:

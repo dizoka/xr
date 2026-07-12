@@ -36,17 +36,15 @@ def build_application(settings: Settings) -> web.Application:
     )
     dispatcher = Dispatcher(storage=MemoryStorage())
 
-    # Спочатку підключаємо користувацькі кнопки. Так u:* завжди
-    # обробляються каталогом і не перетинаються з адмін-middleware.
     dispatcher.include_router(
-        UserHandlers(
+        AdminHandlers(
             catalog_repository,
             inquiry_repository,
             settings.admin_ids,
         ).router
     )
     dispatcher.include_router(
-        AdminHandlers(
+        UserHandlers(
             catalog_repository,
             inquiry_repository,
             settings.admin_ids,
@@ -60,16 +58,12 @@ def build_application(settings: Settings) -> web.Application:
         public_commands = [
             BotCommand(command="start", description="Відкрити каталог"),
             BotCommand(command="catalog", description="Каталог товарів"),
-            BotCommand(command="id", description="Показати мій Telegram ID"),
         ]
         await bot.set_my_commands(public_commands)
 
         admin_commands = [
             *public_commands,
             BotCommand(command="admin", description="Адмін-панель"),
-            BotCommand(command="addadmin", description="Додати працівника"),
-            BotCommand(command="deladmin", description="Забрати доступ працівника"),
-            BotCommand(command="admins", description="Список працівників"),
         ]
         for admin_id in settings.admin_ids:
             await bot.set_my_commands(
