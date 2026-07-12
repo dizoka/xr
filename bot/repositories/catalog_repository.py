@@ -172,7 +172,7 @@ class CatalogRepository:
     async def count_products(
         self, category_id: int, only_in_stock: bool = False
     ) -> int:
-        stock_filter = "AND in_stock = 1 AND quantity > 0" if only_in_stock else ""
+        stock_filter = "AND in_stock = 1" if only_in_stock else ""
         row = await self._database.fetchone(
             f"""
             SELECT COUNT(*) AS total
@@ -191,7 +191,7 @@ class CatalogRepository:
         offset: int,
         only_in_stock: bool = False,
     ) -> list[Product]:
-        stock_filter = "AND p.in_stock = 1 AND p.quantity > 0" if only_in_stock else ""
+        stock_filter = "AND p.in_stock = 1" if only_in_stock else ""
         rows = await self._database.fetchall(
             f"""
             SELECT
@@ -240,7 +240,6 @@ class CatalogRepository:
               AND c.archived = 0
               AND p.archived = 0
               AND p.in_stock = 1
-              AND p.quantity > 0
               AND (p.name LIKE ? COLLATE NOCASE OR p.brand LIKE ? COLLATE NOCASE)
             ORDER BY p.position ASC, p.id ASC
             LIMIT ?
@@ -372,7 +371,7 @@ class CatalogRepository:
                 (SELECT COUNT(*) FROM products WHERE archived = 0) AS products,
                 (
                     SELECT COUNT(*) FROM products
-                    WHERE archived = 0 AND in_stock = 1 AND quantity > 0
+                    WHERE archived = 0 AND in_stock = 1
                 ) AS in_stock,
                 (SELECT COUNT(*) FROM inquiries WHERE status = 'new') AS open_inquiries
             """
