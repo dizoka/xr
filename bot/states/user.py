@@ -6,4 +6,6 @@ class UserSearchStates(StatesGroup):
 
 
 class UserOrderStates(StatesGroup):
+    quantity = State()
     variant = State()
+    cart = State()
