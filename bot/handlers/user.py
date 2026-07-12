@@ -31,6 +31,8 @@ from bot.utils.callbacks import (
 from bot.utils.messages import replace_with_photo_or_text, replace_with_text
 from bot.utils.product_types import order_profile
 from bot.utils.text import (
+    admin_cart_text,
+    cart_text,
     customer_order_text,
     h,
     inquiry_text,
@@ -98,6 +100,18 @@ class UserHandlers:
         self.router.callback_query.register(self.product, F.data.startswith("u:p:"))
         self.router.callback_query.register(
             self.order_start, F.data.startswith("u:buy:")
+        )
+        self.router.callback_query.register(
+            self.order_quantity, F.data.startswith("u:qty:")
+        )
+        self.router.callback_query.register(
+            self.cart_add_more, F.data == "u:cart:add"
+        )
+        self.router.callback_query.register(
+            self.cart_checkout, F.data == "u:cart:checkout"
+        )
+        self.router.callback_query.register(
+            self.cart_clear, F.data == "u:cart:clear"
         )
         self.router.callback_query.register(
             self.order_cancel, F.data == "u:order:cancel"
@@ -405,24 +419,68 @@ class UserHandlers:
             await callback.message.answer("Цей товар зараз недоступний.")
             return
 
-        await state.clear()
+        existing = await state.get_data()
+        cart = list(existing.get("cart", []))
         profile = order_profile(product)
+        await state.set_state(UserOrderStates.quantity)
         await state.update_data(
+            cart=cart,
             product_id=product.id,
+            quantity=1,
             variant_label=profile.variant_label or "",
             request_key=uuid4().hex,
         )
+        await callback.message.answer(
+            f"<b>🛒 {h(product_title(product))}</b>\n\nОберіть потрібну кількість:",
+            reply_markup=user_kb.quantity_menu(product.id, 1),
+        )
 
-        if profile.variant_prompt:
-            await state.set_state(UserOrderStates.variant)
-            await callback.message.answer(
-                f"<b>🛒 {h(product_title(product))}</b>\n\n{h(profile.variant_prompt)}",
-                reply_markup=user_kb.order_cancel_menu(),
-            )
+    async def order_quantity(self, callback: CallbackQuery, state: FSMContext) -> None:
+        await answer_callback_safely(callback)
+        if not callback.message:
             return
-
-        await state.update_data(variant="")
-        await self._finish_order(callback.message, state, callback.from_user)
+        parts = (callback.data or "").split(":")
+        if len(parts) != 4:
+            return
+        action = parts[2]
+        try:
+            product_id = int(parts[3])
+        except ValueError:
+            return
+        data = await state.get_data()
+        if int(data.get("product_id", 0)) != product_id:
+            await callback.message.answer("Цей вибір застарів. Оберіть товар ще раз.")
+            return
+        product = await self.catalog.get_product(product_id)
+        if product is None or not product.in_stock or product.quantity <= 0:
+            await state.clear()
+            await callback.message.answer("Цей товар уже недоступний.")
+            return
+        quantity = max(1, int(data.get("quantity", 1)))
+        if action == "plus":
+            quantity = min(product.quantity, quantity + 1)
+        elif action == "minus":
+            quantity = max(1, quantity - 1)
+        elif action == "confirm":
+            await state.update_data(quantity=quantity)
+            profile = order_profile(product)
+            if profile.variant_prompt:
+                await state.set_state(UserOrderStates.variant)
+                await callback.message.answer(
+                    f"<b>🛒 {h(product_title(product))}</b>\n\n{h(profile.variant_prompt)}",
+                    reply_markup=user_kb.order_cancel_menu(),
+                )
+                return
+            await state.update_data(variant="")
+            await self._add_current_item_to_cart(callback.message, state)
+            return
+        await state.update_data(quantity=quantity)
+        try:
+            await callback.message.edit_reply_markup(
+                reply_markup=user_kb.quantity_menu(product.id, quantity)
+            )
+        except Exception:
+            logger.debug("Не вдалося оновити клавіатуру кількості", exc_info=True)
 
     async def order_variant_message(self, message: Message, state: FSMContext) -> None:
         if message.from_user is None:
@@ -441,62 +499,86 @@ class UserHandlers:
             )
             return
         await state.update_data(variant=value)
-        await self._finish_order(message, state, message.from_user)
+        await self._add_current_item_to_cart(message, state)
 
-    async def _finish_order(
-        self,
-        message: Message,
-        state: FSMContext,
-        customer: User,
-    ) -> None:
+    async def _add_current_item_to_cart(self, message: Message, state: FSMContext) -> None:
         data = await state.get_data()
         product_id = int(data.get("product_id", 0))
-        variant = str(data.get("variant", "")).strip()
-        variant_label = str(data.get("variant_label", "")).strip()
-        request_key = str(data.get("request_key") or uuid4().hex)
-
-        try:
-            result = await self.order_service.create_order(
-                user_id=customer.id,
-                username=customer.username,
-                full_name=customer.full_name,
-                product_id=product_id,
-                variant_label=variant_label,
-                variant=variant,
-                request_key=request_key,
-            )
-        except ProductUnavailableError:
-            await state.clear()
-            await message.answer(
-                "Цей товар уже недоступний.",
-                reply_markup=user_kb.back_home(),
-            )
+        product = await self.catalog.get_product(product_id)
+        if product is None or not product.in_stock or product.quantity <= 0:
+            await message.answer("Цей товар уже недоступний.")
             return
-        except DuplicateOrderError:
-            await state.clear()
-            await message.answer(
-                "Ваше замовлення вже прийнято. Не потрібно натискати кнопку повторно.",
-                reply_markup=user_kb.back_home(),
-            )
-            return
-
-        await state.clear()
+        quantity = max(1, min(int(data.get("quantity", 1)), product.quantity))
+        cart = list(data.get("cart", []))
+        cart.append({
+            "product_id": product.id,
+            "title": product_title(product),
+            "price": product.price,
+            "quantity": quantity,
+            "variant": str(data.get("variant", "")).strip(),
+            "variant_label": str(data.get("variant_label", "")).strip(),
+        })
+        await state.set_state(UserOrderStates.cart)
+        await state.update_data(cart=cart, product_id=0, quantity=1, variant="", variant_label="")
         currency = await self._safe_setting("currency") or "грн"
-        if result.created:
-            staff_ids = await self.catalog.list_staff_admins()
-            recipients = set(self.admin_ids) | set(staff_ids)
-            await NotificationService(message.bot).send_many(
-                recipients,
-                inquiry_text(result.inquiry, currency),
-                reply_markup=admin_kb.inquiry_actions(
-                    result.inquiry.id,
-                    result.inquiry.user_id,
-                ),
-            )
-
         contact_url = await self._safe_setting("contact_url")
         await message.answer(
-            customer_order_text(result.product, currency, variant),
+            cart_text(cart, currency),
+            reply_markup=user_kb.cart_menu(contact_url),
+        )
+
+    async def cart_add_more(self, callback: CallbackQuery, state: FSMContext) -> None:
+        await answer_callback_safely(callback)
+        if callback.message:
+            await self._show_catalog(callback.message)
+
+    async def cart_clear(self, callback: CallbackQuery, state: FSMContext) -> None:
+        await answer_callback_safely(callback, "Кошик очищено")
+        await state.clear()
+        if callback.message:
+            await self._show_catalog(callback.message)
+
+    async def cart_checkout(self, callback: CallbackQuery, state: FSMContext) -> None:
+        await answer_callback_safely(callback)
+        if not callback.message:
+            return
+        data = await state.get_data()
+        cart = list(data.get("cart", []))
+        if not cart:
+            await callback.message.answer("Кошик порожній.", reply_markup=user_kb.back_home())
+            return
+
+        created_any = False
+        for index, item in enumerate(cart):
+            try:
+                await self.order_service.create_order(
+                    user_id=callback.from_user.id,
+                    username=callback.from_user.username,
+                    full_name=callback.from_user.full_name,
+                    product_id=int(item["product_id"]),
+                    variant_label=str(item.get("variant_label", "")),
+                    variant=str(item.get("variant", "")),
+                    request_key=f"{data.get('request_key') or uuid4().hex}:{index}:{item.get('quantity', 1)}",
+                )
+                created_any = True
+            except (ProductUnavailableError, DuplicateOrderError):
+                logger.warning("Не вдалося додати позицію кошика: %s", item)
+
+        currency = await self._safe_setting("currency") or "грн"
+        if created_any:
+            staff_ids = await self.catalog.list_staff_admins()
+            recipients = set(self.admin_ids) | set(staff_ids)
+            await NotificationService(callback.bot).send_many(
+                recipients,
+                admin_cart_text(
+                    cart, currency, callback.from_user.id,
+                    callback.from_user.full_name, callback.from_user.username
+                ),
+            )
+        await state.clear()
+        contact_url = await self._safe_setting("contact_url")
+        await callback.message.answer(
+            "<b>✅ Замовлення сформовано</b>\n\n" + cart_text(cart, currency),
             reply_markup=user_kb.order_ready_menu(contact_url),
         )
 
