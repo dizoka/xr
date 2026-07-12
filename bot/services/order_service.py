@@ -55,7 +55,7 @@ class OrderService:
         self._recent_orders.add(recent_key)
 
         product = await self._catalog.get_product(product_id)
-        if product is None or not product.in_stock or product.quantity <= 0:
+        if product is None or not product.in_stock:
             self._recent_orders.discard(recent_key)
             raise ProductUnavailableError("Цей товар уже недоступний")
 
