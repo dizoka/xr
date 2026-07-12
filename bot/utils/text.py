@@ -16,7 +16,7 @@ def product_title(product: Product) -> str:
 
 
 def product_card_text(product: Product, currency: str) -> str:
-    available = product.in_stock and product.quantity > 0
+    available = product.in_stock
     status = "✅ Є в наявності" if available else "❌ Немає в наявності"
     description = (
         h(product.description)
@@ -36,7 +36,7 @@ def product_card_text(product: Product, currency: str) -> str:
 def admin_product_text(product: Product, currency: str) -> str:
     status = (
         "✅ У наявності"
-        if product.in_stock and product.quantity > 0
+        if product.in_stock
         else "❌ Немає в наявності"
     )
     photo = "✅ Є" if product.photo_file_id else "— Немає"
@@ -122,14 +122,11 @@ def cart_text(items: list[dict], currency: str) -> str:
         total += subtotal
         lines.append(f"<b>{index}. {h(item.get('title', 'Товар'))}</b>")
         lines.append(f"Кількість: <b>{qty}</b>")
-        variant = str(item.get("variant", "")).strip()
-        label = str(item.get("variant_label", "")).strip()
-        if variant and label:
-            lines.append(f"{h(label)}: <b>{h(variant)}</b>")
         lines.append(f"Сума: <b>{subtotal:g} {h(currency)}</b>")
         lines.append("")
     lines.append(f"<b>Разом: {total:g} {h(currency)}</b>")
     lines.append("")
+    lines.append("ℹ️ Наявність потрібної кількості, кольори та смаки уточнюйте у продавця.")
     lines.append("🔞 Продаж здійснюється лише повнолітнім.")
     return "\n".join(lines)
 
