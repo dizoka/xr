@@ -29,13 +29,10 @@ from bot.utils.callbacks import (
     parse_callback_ints,
 )
 from bot.utils.messages import replace_with_photo_or_text, replace_with_text
-from bot.utils.product_types import order_profile
 from bot.utils.text import (
     admin_cart_text,
     cart_text,
-    customer_order_text,
     h,
-    inquiry_text,
     product_card_text,
     product_title,
 )
@@ -77,12 +74,6 @@ class UserHandlers:
         self.router.message.register(
             self.search_message,
             UserSearchStates.query,
-            F.text,
-            ~F.text.startswith("/"),
-        )
-        self.router.message.register(
-            self.order_variant_message,
-            UserOrderStates.variant,
             F.text,
             ~F.text.startswith("/"),
         )
@@ -348,7 +339,7 @@ class UserHandlers:
             return
         product_id, return_page = parsed
         product = await self.catalog.get_product(product_id)
-        if product is None or not product.in_stock or product.quantity <= 0:
+        if product is None or not product.in_stock:
             await self._show_catalog(callback.message)
             return
 
@@ -415,19 +406,19 @@ class UserHandlers:
             return
 
         product = await self.catalog.get_product(parsed[0])
-        if product is None or not product.in_stock or product.quantity <= 0:
+        if product is None or not product.in_stock:
             await callback.message.answer("Цей товар зараз недоступний.")
             return
 
         existing = await state.get_data()
         cart = list(existing.get("cart", []))
-        profile = order_profile(product)
         await state.set_state(UserOrderStates.quantity)
         await state.update_data(
             cart=cart,
             product_id=product.id,
             quantity=1,
-            variant_label=profile.variant_label or "",
+            variant_label="",
+            variant="",
             request_key=uuid4().hex,
         )
         await callback.message.answer(
@@ -452,26 +443,17 @@ class UserHandlers:
             await callback.message.answer("Цей вибір застарів. Оберіть товар ще раз.")
             return
         product = await self.catalog.get_product(product_id)
-        if product is None or not product.in_stock or product.quantity <= 0:
+        if product is None or not product.in_stock:
             await state.clear()
             await callback.message.answer("Цей товар уже недоступний.")
             return
         quantity = max(1, int(data.get("quantity", 1)))
         if action == "plus":
-            quantity = min(product.quantity, quantity + 1)
+            quantity = min(999, quantity + 1)
         elif action == "minus":
             quantity = max(1, quantity - 1)
         elif action == "confirm":
-            await state.update_data(quantity=quantity)
-            profile = order_profile(product)
-            if profile.variant_prompt:
-                await state.set_state(UserOrderStates.variant)
-                await callback.message.answer(
-                    f"<b>🛒 {h(product_title(product))}</b>\n\n{h(profile.variant_prompt)}",
-                    reply_markup=user_kb.order_cancel_menu(),
-                )
-                return
-            await state.update_data(variant="")
+            await state.update_data(quantity=quantity, variant="", variant_label="")
             await self._add_current_item_to_cart(callback.message, state)
             return
         await state.update_data(quantity=quantity)
@@ -482,33 +464,14 @@ class UserHandlers:
         except Exception:
             logger.debug("Не вдалося оновити клавіатуру кількості", exc_info=True)
 
-    async def order_variant_message(self, message: Message, state: FSMContext) -> None:
-        if message.from_user is None:
-            return
-        value = " ".join((message.text or "").strip().split())
-        data = await state.get_data()
-        variant_label = str(data.get("variant_label", "Варіант")) or "Варіант"
-        if len(value) < 2:
-            await message.answer(
-                f"{h(variant_label)} має містити щонайменше 2 символи."
-            )
-            return
-        if len(value) > 80:
-            await message.answer(
-                f"{h(variant_label)} має містити не більше 80 символів."
-            )
-            return
-        await state.update_data(variant=value)
-        await self._add_current_item_to_cart(message, state)
-
     async def _add_current_item_to_cart(self, message: Message, state: FSMContext) -> None:
         data = await state.get_data()
         product_id = int(data.get("product_id", 0))
         product = await self.catalog.get_product(product_id)
-        if product is None or not product.in_stock or product.quantity <= 0:
+        if product is None or not product.in_stock:
             await message.answer("Цей товар уже недоступний.")
             return
-        quantity = max(1, min(int(data.get("quantity", 1)), product.quantity))
+        quantity = max(1, min(int(data.get("quantity", 1)), 999))
         cart = list(data.get("cart", []))
         cart.append({
             "product_id": product.id,
