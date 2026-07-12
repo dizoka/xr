@@ -123,7 +123,7 @@ def product_menu(
     contact_url: str = "",
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    if product.in_stock and product.quantity > 0:
+    if product.in_stock:
         builder.button(text="🛒 Обрати товар", callback_data=f"u:buy:{product.id}")
     safe_url = _safe_contact_url(contact_url)
     if safe_url:
