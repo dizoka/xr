@@ -23,12 +23,10 @@ def product_card_text(product: Product, currency: str) -> str:
         if product.description
         else "Опис товару уточнюйте у продавця."
     )
-    left = f"{max(0, product.quantity)} шт." if available else "0 шт."
     return (
         f"<b>{h(product.category_emoji)} {h(product_title(product))}</b>\n\n"
         f"{description}\n\n"
         f"💰 <b>Ціна:</b> {h(product.price)} {h(currency)}\n"
-        f"📦 <b>Залишок:</b> {left}\n"
         f"{status}\n\n"
         "🔞 <i>Продаж здійснюється лише повнолітнім. "
         "Продавець може попросити підтвердити вік.</i>"
@@ -108,3 +106,39 @@ def customer_order_text(product: Product, currency: str, variant: str = "") -> s
         ]
     )
     return "\n".join(lines)
+
+
+def cart_text(items: list[dict], currency: str) -> str:
+    lines = ["<b>🛒 Ваш кошик</b>", ""]
+    total = 0.0
+    for index, item in enumerate(items, 1):
+        qty = int(item.get("quantity", 1))
+        raw_price = str(item.get("price", "0")).replace(",", ".")
+        try:
+            price = float(raw_price)
+        except ValueError:
+            price = 0.0
+        subtotal = price * qty
+        total += subtotal
+        lines.append(f"<b>{index}. {h(item.get('title', 'Товар'))}</b>")
+        lines.append(f"Кількість: <b>{qty}</b>")
+        variant = str(item.get("variant", "")).strip()
+        label = str(item.get("variant_label", "")).strip()
+        if variant and label:
+            lines.append(f"{h(label)}: <b>{h(variant)}</b>")
+        lines.append(f"Сума: <b>{subtotal:g} {h(currency)}</b>")
+        lines.append("")
+    lines.append(f"<b>Разом: {total:g} {h(currency)}</b>")
+    lines.append("")
+    lines.append("🔞 Продаж здійснюється лише повнолітнім.")
+    return "\n".join(lines)
+
+
+def admin_cart_text(items: list[dict], currency: str, user_id: int, full_name: str, username: str | None) -> str:
+    username_text = f"@{h(username)}" if username else "не вказано"
+    return (
+        "<b>🛒 Нове комплексне замовлення</b>\n\n"
+        + cart_text(items, currency)
+        + f'\n\n👤 Покупець: <a href="tg://user?id={user_id}">{h(full_name)}</a>'
+        + f"\nUsername: {username_text}\nTelegram ID: <code>{user_id}</code>"
+    )
