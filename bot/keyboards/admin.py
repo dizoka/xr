@@ -192,6 +192,19 @@ def promotions_products_menu(category_id: int, has_url: bool) -> InlineKeyboardM
     builder.adjust(1, 2)
     return builder.as_markup()
 
+
+
+def cartridges_products_menu(category_id: int, has_url: bool) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="✏️ Змінити посилання" if has_url else "➕ Додати посилання",
+        callback_data="a:set:cartridges_url",
+    )
+    builder.button(text="◀️ Категорії", callback_data="a:products")
+    builder.button(text="🏠 Адмін", callback_data="a:home")
+    builder.adjust(1, 2)
+    return builder.as_markup()
+
 def product_actions(product: Product, return_page: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="✏️ Назва", callback_data=f"a:pe:name:{product.id}")

@@ -51,14 +51,22 @@ def main_menu(contact_url: str = "") -> InlineKeyboardMarkup:
 def categories_menu(
     categories: list[Category],
     promotions_url: str = "",
+    cartridges_url: str = "",
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     safe_promotions_url = _safe_contact_url(promotions_url)
+    safe_cartridges_url = _safe_contact_url(cartridges_url)
     for category in categories:
-        if category.name.strip().casefold() == "акції" and safe_promotions_url:
+        category_name = category.name.strip().casefold()
+        if category_name == "акції" and safe_promotions_url:
             builder.button(
                 text=f"{category.emoji} {category.name}",
                 url=safe_promotions_url,
+            )
+        elif category_name in {"картриджі", "картриджи"} and safe_cartridges_url:
+            builder.button(
+                text=f"{category.emoji} {category.name}",
+                url=safe_cartridges_url,
             )
         else:
             builder.button(
