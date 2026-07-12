@@ -85,10 +85,7 @@ def products_menu(
     builder = InlineKeyboardBuilder()
     for product in products:
         builder.button(
-            text=(
-                f"{product_title(product)} — {product.price} {currency} "
-                f"• {product.quantity} шт."
-            ),
+            text=product_title(product),
             callback_data=f"u:p:{product.id}:{page}",
         )
     builder.adjust(1)
@@ -144,10 +141,7 @@ def search_results(products: list[Product], currency: str) -> InlineKeyboardMark
     builder = InlineKeyboardBuilder()
     for product in products:
         builder.button(
-            text=(
-                f"{product_title(product)} — {product.price} {currency} "
-                f"• {product.quantity} шт."
-            ),
+            text=product_title(product),
             callback_data=f"u:p:{product.id}:0",
         )
     builder.button(text="🔎 Новий пошук", callback_data="u:search")
@@ -184,4 +178,32 @@ def fallback_menu() -> InlineKeyboardMarkup:
 def order_cancel_menu() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="❌ Скасувати", callback_data="u:order:cancel")
+    return builder.as_markup()
+
+
+def quantity_menu(product_id: int, quantity: int) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="➖", callback_data=f"u:qty:minus:{product_id}"),
+        InlineKeyboardButton(text=f"{quantity} шт.", callback_data="noop"),
+        InlineKeyboardButton(text="➕", callback_data=f"u:qty:plus:{product_id}"),
+    )
+    builder.row(
+        InlineKeyboardButton(text="✅ Підтвердити кількість", callback_data=f"u:qty:confirm:{product_id}")
+    )
+    builder.row(
+        InlineKeyboardButton(text="❌ Скасувати", callback_data="u:order:cancel")
+    )
+    return builder.as_markup()
+
+
+def cart_menu(contact_url: str = "") -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="➕ Додати ще товар", callback_data="u:cart:add")
+    builder.button(text="✅ Оформити все замовлення", callback_data="u:cart:checkout")
+    builder.button(text="🗑 Очистити кошик", callback_data="u:cart:clear")
+    safe_url = _safe_contact_url(contact_url)
+    if safe_url:
+        builder.button(text="💬 Написати продавцю", url=safe_url)
+    builder.adjust(1)
     return builder.as_markup()
