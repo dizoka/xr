@@ -372,7 +372,8 @@ class AdminHandlers:
             await answer_callback_safely(callback, "Категорію не знайдено", show_alert=True)
             return
 
-        if category.name.strip().casefold() == "акції":
+        category_name = category.name.strip().casefold()
+        if category_name == "акції":
             promotions_url = await self.catalog.get_setting("promotions_url", "")
             text = (
                 f"<b>{h(category.emoji)} {h(category.name)}</b>\n\n"
@@ -384,6 +385,22 @@ class AdminHandlers:
                 callback.message,
                 text,
                 admin_kb.promotions_products_menu(category_id, bool(promotions_url)),
+            )
+            await answer_callback_safely(callback)
+            return
+
+        if category_name in {"картриджі", "картриджи"}:
+            cartridges_url = await self.catalog.get_setting("cartridges_url", "")
+            text = (
+                f"<b>{h(category.emoji)} {h(category.name)}</b>\n\n"
+                "Тут налаштовується посилання на повідомлення в Telegram-каналі, "
+                "де зібрані всі доступні картриджі.\n\n"
+                f"Поточне посилання: <code>{h(cartridges_url) if cartridges_url else 'Не задано'}</code>"
+            )
+            await replace_with_text(
+                callback.message,
+                text,
+                admin_kb.cartridges_products_menu(category_id, bool(cartridges_url)),
             )
             await answer_callback_safely(callback)
             return
@@ -685,13 +702,15 @@ class AdminHandlers:
         currency = await self.catalog.get_setting("currency", "грн")
         contact_url = await self.catalog.get_setting("contact_url", "Не задано")
         promotions_url = await self.catalog.get_setting("promotions_url", "")
+        cartridges_url = await self.catalog.get_setting("cartridges_url", "")
 
         text = (
             "<b>⚙️ Налаштування магазину</b>\n\n"
             f"Назва: {h(store_name)}\n"
             f"Валюта: {h(currency)}\n"
             f"Посилання продавця: {h(contact_url)}\n"
-            f"Посилання на акції: {h(promotions_url) if promotions_url else 'Не задано'}\n\n"
+            f"Посилання на акції: {h(promotions_url) if promotions_url else 'Не задано'}\n"
+            f"Посилання на картриджі: {h(cartridges_url) if cartridges_url else 'Не задано'}\n\n"
             "Оберіть параметр для зміни."
         )
         if callback.message:
@@ -706,6 +725,7 @@ class AdminHandlers:
             "address_schedule",
             "contact_url",
             "promotions_url",
+            "cartridges_url",
             "currency",
             "age_warning",
         }
@@ -722,6 +742,14 @@ class AdminHandlers:
                 f"Поточне значення:\n<code>{h(current) if current else 'Не задано'}</code>\n\n"
                 "Надішліть URL конкретного повідомлення у Telegram-каналі.\n"
                 "Наприклад: <code>https://t.me/CrystalStoreKovel/123</code>"
+            )
+        elif key == "cartridges_url":
+            prompt = (
+                "<b>🧩 Посилання на повідомлення з картриджами</b>\n\n"
+                f"Поточне значення:\n<code>{h(current) if current else 'Не задано'}</code>\n\n"
+                "Надішліть URL конкретного повідомлення у Telegram-каналі, "
+                "де зібрані всі картриджі.\n"
+                "Наприклад: <code>https://t.me/CrystalStoreKovel/456</code>"
             )
         else:
             prompt = (
@@ -740,7 +768,7 @@ class AdminHandlers:
         if not value:
             await message.answer("Значення не може бути порожнім.")
             return
-        if key in {"contact_url", "promotions_url"} and not value.startswith(("https://", "http://", "tg://")):
+        if key in {"contact_url", "promotions_url", "cartridges_url"} and not value.startswith(("https://", "http://", "tg://")):
             await message.answer("Посилання має починатися з https://, http:// або tg://")
             return
         await self.catalog.set_setting(key, value)
@@ -761,6 +789,24 @@ class AdminHandlers:
                 await message.answer(
                     text,
                     reply_markup=admin_kb.promotions_products_menu(promotions_category.id, True),
+                )
+                return
+
+        if key == "cartridges_url":
+            categories = await self.catalog.list_categories(include_inactive=True)
+            cartridges_category = next(
+                (category for category in categories if category.name.strip().casefold() in {"картриджі", "картриджи"}),
+                None,
+            )
+            if cartridges_category is not None:
+                text = (
+                    "✅ Посилання на картриджі збережено.\n\n"
+                    f"<b>{h(cartridges_category.emoji)} {h(cartridges_category.name)}</b>\n\n"
+                    f"Поточне посилання: <code>{h(value)}</code>"
+                )
+                await message.answer(
+                    text,
+                    reply_markup=admin_kb.cartridges_products_menu(cartridges_category.id, True),
                 )
                 return
 

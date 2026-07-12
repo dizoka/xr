@@ -111,13 +111,14 @@ class UserHandlers:
             return
 
         promotions_url = await self._safe_setting("promotions_url")
+        cartridges_url = await self._safe_setting("cartridges_url")
         text = "<b>🛍 Каталог</b>\n\nОберіть категорію:"
         if not categories:
             text += "\n\nКатегорії поки не додані."
         await replace_with_text(
             message,
             text,
-            user_kb.categories_menu(categories, promotions_url),
+            user_kb.categories_menu(categories, promotions_url, cartridges_url),
         )
 
     async def _show_age_gate(self, message: Message) -> None:
@@ -173,9 +174,10 @@ class UserHandlers:
             )
             return
         promotions_url = await self._safe_setting("promotions_url")
+        cartridges_url = await self._safe_setting("cartridges_url")
         await message.answer(
             "<b>🛍 Каталог</b>\n\nОберіть категорію:",
-            reply_markup=user_kb.categories_menu(categories, promotions_url),
+            reply_markup=user_kb.categories_menu(categories, promotions_url, cartridges_url),
         )
 
     async def noop(self, callback: CallbackQuery) -> None:
@@ -451,20 +453,22 @@ class UserHandlers:
         if callback.message:
             await self._finish_order(callback.message, state, bot, "", callback.from_user)
 
+
+    async def unknown_user_button(self, callback: CallbackQuery, state: FSMContext) -> None:
+        """Обробляє старі або невідомі кнопки користувача без падіння бота."""
+        await answer_callback_safely(
+            callback,
+            "Кнопку оновлено. Відкриваю головне меню.",
+        )
+        await state.clear()
+        if not await self._ensure_callback_access(callback):
+            return
+        if callback.message:
+            await self._show_home(callback.message)
+
     async def order_cancel(self, callback: CallbackQuery, state: FSMContext) -> None:
         await state.clear()
         await answer_callback_safely(callback, "Замовлення скасовано")
         if callback.message:
             await self._show_home(callback.message)
 
-
-
-    async def unknown_user_button(self, callback: CallbackQuery, state: FSMContext) -> None:
-        """Безпечно обробляє застарілі або невідомі кнопки користувача."""
-        await state.clear()
-        await answer_callback_safely(
-            callback,
-            "Ця кнопка застаріла. Відкриваю головне меню.",
-        )
-        if callback.message:
-            await self._show_home(callback.message)
