@@ -51,14 +51,15 @@ class UserHandlers:
         catalog: CatalogRepository,
         inquiries: InquiryRepository,
         admin_ids: frozenset[int],
-        bot: Bot,
+        bot: Bot | None = None,
     ) -> None:
         self.catalog = catalog
         self.inquiries = inquiries
         self.admin_ids = admin_ids
+        # ``bot`` лишено необов'язковим для сумісності зі старим main.py.
+        # У самих handlers використовуємо bot, прив'язаний до поточного update.
         self.bot = bot
         self.order_service = OrderService(catalog, inquiries)
-        self.notifications = NotificationService(bot)
         self._age_cache = TTLCache[int](ttl_seconds=15 * 60, max_size=5_000)
         self.router = Router(name="user")
         self.router.message.middleware(RateLimitMiddleware(limit=8, period=5))
@@ -340,7 +341,7 @@ class UserHandlers:
         currency = await self._safe_setting("currency") or "грн"
         contact_url = await self._safe_setting("contact_url")
         await replace_with_photo_or_text(
-            self.bot,
+            callback.bot,
             callback.message,
             text=product_card_text(product, currency),
             photo_file_id=product.photo_file_id,
@@ -375,7 +376,7 @@ class UserHandlers:
             await message.answer("Введіть щонайменше 2 символи.")
             return
 
-        await self.bot.send_chat_action(message.chat.id, ChatAction.TYPING)
+        await message.bot.send_chat_action(message.chat.id, ChatAction.TYPING)
         products = await self.catalog.search_products(query)
         currency = await self._safe_setting("currency") or "грн"
         await state.clear()
@@ -484,7 +485,7 @@ class UserHandlers:
         if result.created:
             staff_ids = await self.catalog.list_staff_admins()
             recipients = set(self.admin_ids) | set(staff_ids)
-            await self.notifications.send_many(
+            await NotificationService(message.bot).send_many(
                 recipients,
                 inquiry_text(result.inquiry, currency),
                 reply_markup=admin_kb.inquiry_actions(
