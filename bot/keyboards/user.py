@@ -191,10 +191,16 @@ def product_menu(
     product: Product,
     return_page: int,
     contact_url: str = "",
+    *,
+    availability_url: str = "",
+    availability_label: str = "",
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     if product.in_stock:
         builder.button(text="🛒 Обрати товар", callback_data=f"u:buy:{product.id}")
+    safe_availability_url = _safe_contact_url(availability_url)
+    if safe_availability_url and availability_label:
+        builder.button(text=availability_label, url=safe_availability_url)
     safe_url = _safe_contact_url(contact_url)
     if safe_url:
         builder.button(text="💬 Написати продавцю", url=safe_url)

@@ -120,6 +120,21 @@ class UserHandlers:
             self.unknown_user_button, F.data.startswith("u:")
         )
 
+
+    async def _root_category_name(self, category_id: int) -> str:
+        """Повертає назву кореневої категорії для вкладених категорій."""
+        current_id: int | None = category_id
+        root_name = ""
+        for _ in range(12):
+            if current_id is None:
+                break
+            category = await self.catalog.get_category(current_id)
+            if category is None:
+                break
+            root_name = category.name.strip().casefold()
+            current_id = category.parent_id
+        return root_name
+
     async def _safe_setting(self, key: str) -> str:
         default = DEFAULT_SETTINGS.get(key, "")
         try:
@@ -349,13 +364,26 @@ class UserHandlers:
 
         currency = await self._safe_setting("currency") or "грн"
         contact_url = await self._safe_setting("contact_url")
+        root_category = await self._root_category_name(product.category_id)
+        availability_url = ""
+        availability_label = ""
+        if root_category in {"pod-системи", "pod системи", "pod-системы", "pod systems"}:
+            availability_url = await self._safe_setting("colors_url")
+            availability_label = "🎨 Переглянути доступні кольори"
+        elif root_category in {"рідини", "жидкости", "liquids"}:
+            availability_url = await self._safe_setting("flavors_url")
+            availability_label = "💧 Переглянути доступні смаки"
         await replace_with_photo_or_text(
             callback.bot,
             callback.message,
             text=product_card_text(product, currency),
             photo_file_id=product.photo_file_id,
             reply_markup=user_kb.product_menu(
-                product, max(0, return_page), contact_url
+                product,
+                max(0, return_page),
+                contact_url,
+                availability_url=availability_url,
+                availability_label=availability_label,
             ),
         )
 

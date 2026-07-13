@@ -9,6 +9,8 @@ DEFAULT_SETTINGS: dict[str, str] = {
     "contact_url": "https://t.me/USERNAME",
     "promotions_url": "",
     "cartridges_url": "",
+    "flavors_url": "",
+    "colors_url": "",
     "currency": "грн",
     "age_warning": (
         "🔞 Каталог призначений лише для повнолітніх користувачів.\n\n"

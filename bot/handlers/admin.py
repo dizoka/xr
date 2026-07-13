@@ -666,18 +666,14 @@ class AdminHandlers:
         if len(value) > 900:
             await message.answer("Опис надто довгий. Максимум 900 символів.")
             return
-        data = await state.get_data()
-        category = await self.catalog.get_category(int(data["category_id"]))
-        suggested = infer_variant_type(category.name if category else "")
         await state.update_data(
             description="" if value == "-" else value,
-            suggested_variant_type=suggested,
+            variant_type="none",
         )
-        await state.set_state(AddProductStates.variant_type)
+        await state.set_state(AddProductStates.photo)
         await message.answer(
-            "<b>Що покупець має вказати при замовленні?</b>\n\n"
-            "Для POD-систем оберіть колір, для рідин — смак.",
-            reply_markup=admin_kb.variant_type_step(suggested),
+            "Надішліть фотографію товару або натисніть «Без фото».",
+            reply_markup=admin_kb.photo_step(),
         )
 
     async def add_product_variant_type(
@@ -1008,6 +1004,8 @@ class AdminHandlers:
         contact_url = await self.catalog.get_setting("contact_url", "Не задано")
         promotions_url = await self.catalog.get_setting("promotions_url", "")
         cartridges_url = await self.catalog.get_setting("cartridges_url", "")
+        flavors_url = await self.catalog.get_setting("flavors_url", "")
+        colors_url = await self.catalog.get_setting("colors_url", "")
 
         text = (
             "<b>⚙️ Налаштування магазину</b>\n\n"
@@ -1015,7 +1013,9 @@ class AdminHandlers:
             f"Валюта: {h(currency)}\n"
             f"Посилання продавця: {h(contact_url)}\n"
             f"Посилання на акції: {h(promotions_url) if promotions_url else 'Не задано'}\n"
-            f"Посилання на картриджі: {h(cartridges_url) if cartridges_url else 'Не задано'}\n\n"
+            f"Посилання на картриджі: {h(cartridges_url) if cartridges_url else 'Не задано'}\n"
+            f"Список смаків: {h(flavors_url) if flavors_url else 'Не задано'}\n"
+            f"Список кольорів: {h(colors_url) if colors_url else 'Не задано'}\n\n"
             "Оберіть параметр для зміни."
         )
         if callback.message:
@@ -1033,6 +1033,8 @@ class AdminHandlers:
             "contact_url",
             "promotions_url",
             "cartridges_url",
+            "flavors_url",
+            "colors_url",
             "currency",
             "age_warning",
         }
@@ -1051,6 +1053,18 @@ class AdminHandlers:
                 f"Поточне значення:\n<code>{h(current) if current else 'Не задано'}</code>\n\n"
                 "Надішліть URL конкретного повідомлення у Telegram-каналі.\n"
                 "Наприклад: <code>https://t.me/CrystalStoreKovel/123</code>"
+            )
+        elif key == "flavors_url":
+            prompt = (
+                "<b>💧 Посилання на список доступних смаків</b>\n\n"
+                f"Поточне значення:\n<code>{h(current) if current else 'Не задано'}</code>\n\n"
+                "Надішліть URL повідомлення у Telegram-каналі зі смаками рідин."
+            )
+        elif key == "colors_url":
+            prompt = (
+                "<b>🎨 Посилання на список доступних кольорів</b>\n\n"
+                f"Поточне значення:\n<code>{h(current) if current else 'Не задано'}</code>\n\n"
+                "Надішліть URL повідомлення у Telegram-каналі з кольорами POD-систем."
             )
         elif key == "cartridges_url":
             prompt = (
@@ -1081,6 +1095,8 @@ class AdminHandlers:
             "contact_url",
             "promotions_url",
             "cartridges_url",
+            "flavors_url",
+            "colors_url",
         } and not value.startswith(("https://", "http://", "tg://")):
             await message.answer(
                 "Посилання має починатися з https://, http:// або tg://"

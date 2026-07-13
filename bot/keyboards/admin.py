@@ -260,9 +260,6 @@ def product_actions(product: Product, return_page: int) -> InlineKeyboardMarkup:
     builder.button(text="💰 Ціна", callback_data=f"a:pe:price:{product.id}")
     builder.button(text="📦 Кількість", callback_data=f"a:pe:quantity:{product.id}")
     builder.button(text="📝 Опис", callback_data=f"a:pe:description:{product.id}")
-    builder.button(
-        text="🎛 Тип варіанта", callback_data=f"a:pe:variant_type:{product.id}"
-    )
     builder.button(text="🖼 Фото", callback_data=f"a:pe:photo_file_id:{product.id}")
     builder.button(
         text="⛔ Немає в наявності" if product.in_stock else "✅ Є в наявності",
@@ -296,6 +293,8 @@ def settings_menu() -> InlineKeyboardMarkup:
     builder.button(text="👋 Привітання", callback_data="a:set:welcome_text")
     builder.button(text="📍 Адреса та графік", callback_data="a:set:address_schedule")
     builder.button(text="💬 Посилання продавця", callback_data="a:set:contact_url")
+    builder.button(text="💧 Доступні смаки", callback_data="a:set:flavors_url")
+    builder.button(text="🎨 Доступні кольори", callback_data="a:set:colors_url")
     builder.button(text="💵 Валюта", callback_data="a:set:currency")
     builder.button(text="🔞 Текст 18+", callback_data="a:set:age_warning")
     builder.button(text="◀️ Адмін-панель", callback_data="a:home")
