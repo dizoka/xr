@@ -552,22 +552,6 @@ class AdminHandlers:
             await answer_callback_safely(callback)
             return
 
-        if category_name in {"картриджі", "картриджи"}:
-            cartridges_url = await self.catalog.get_setting("cartridges_url", "")
-            text = (
-                f"<b>{h(category.emoji)} {h(category.name)}</b>\n\n"
-                "Тут налаштовується посилання на повідомлення в Telegram-каналі, "
-                "де зібрані всі доступні картриджі.\n\n"
-                f"Поточне посилання: <code>{h(cartridges_url) if cartridges_url else 'Не задано'}</code>"
-            )
-            await replace_with_text(
-                callback.message,
-                text,
-                admin_kb.cartridges_products_menu(category_id, bool(cartridges_url)),
-            )
-            await answer_callback_safely(callback)
-            return
-
         children = await self.catalog.list_categories(
             include_inactive=True, parent_id=category_id
         )
@@ -597,6 +581,11 @@ class AdminHandlers:
                 total_pages=total_pages,
                 currency=currency,
                 parent_id=category.parent_id,
+                external_link_setting=(
+                    "cartridges_url"
+                    if category_name in {"картриджі", "картриджи"}
+                    else None
+                ),
             ),
         )
         await answer_callback_safely(callback)

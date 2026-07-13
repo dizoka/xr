@@ -83,7 +83,17 @@ def category_actions(category: Category) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def category_contents(children: list[Category], products: list[Product], *, category_id: int, page: int, total_pages: int, currency: str, parent_id: int | None) -> InlineKeyboardMarkup:
+def category_contents(
+    children: list[Category],
+    products: list[Product],
+    *,
+    category_id: int,
+    page: int,
+    total_pages: int,
+    currency: str,
+    parent_id: int | None,
+    external_link_setting: str | None = None,
+) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for child in children:
         status = "✅" if child.active else "⛔"
@@ -99,6 +109,13 @@ def category_contents(children: list[Category], products: list[Product], *, cate
     if nav: builder.row(*nav)
     builder.row(InlineKeyboardButton(text="➕ Додати підкатегорію", callback_data=f"a:catadd:{category_id}"))
     builder.row(InlineKeyboardButton(text="➕ Додати товар", callback_data=f"a:padd:{category_id}"))
+    if external_link_setting:
+        builder.row(
+            InlineKeyboardButton(
+                text="🔗 Змінити посилання на повний список",
+                callback_data=f"a:set:{external_link_setting}",
+            )
+        )
     back = "a:products" if parent_id is None else f"a:plist:{parent_id}:0"
     builder.row(InlineKeyboardButton(text="◀️ Назад", callback_data=back), InlineKeyboardButton(text="🏠 Адмін", callback_data="a:home"))
     return builder.as_markup()
