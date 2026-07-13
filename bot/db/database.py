@@ -505,18 +505,34 @@ class Database:
         }
         async with self._lock:
             def _seed() -> None:
-                parent = self.connection.execute(
+                # У базі могли залишитися кілька старих категорій «Рідини»
+                # після попередніх оновлень. Залишаємо лише одну основну кнопку,
+                # а дублікати приховуємо автоматично.
+                parent_rows = self.connection.execute(
                     """SELECT id FROM categories WHERE archived = 0
                     AND lower(trim(name)) IN ('рідини', 'жидкости', 'liquids')
-                    ORDER BY id ASC LIMIT 1"""
-                ).fetchone()
-                if parent is None:
+                    ORDER BY id ASC"""
+                ).fetchall()
+                if not parent_rows:
                     row = self.connection.execute("SELECT COALESCE(MAX(position), 0) + 1 FROM categories").fetchone()
                     position = int(row[0]) if row else 1
-                    self.connection.execute(
+                    cursor = self.connection.execute(
                         "INSERT INTO categories(name, emoji, position, active, archived) VALUES ('Рідини', '💧', ?, 1, 0)",
                         (position,),
                     )
+                    parent_id = int(cursor.lastrowid)
+                else:
+                    parent_id = int(parent_rows[0][0])
+                    self.connection.execute(
+                        "UPDATE categories SET name = 'Рідини', emoji = '💧', active = 1, archived = 0 WHERE id = ?",
+                        (parent_id,),
+                    )
+                    duplicate_ids = [int(row[0]) for row in parent_rows[1:]]
+                    for duplicate_id in duplicate_ids:
+                        self.connection.execute(
+                            "UPDATE categories SET active = 0, archived = 1 WHERE id = ?",
+                            (duplicate_id,),
+                        )
 
                 max_row = self.connection.execute("SELECT COALESCE(MAX(position), 0) FROM categories").fetchone()
                 next_position = int(max_row[0]) if max_row else 0

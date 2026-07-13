@@ -127,7 +127,19 @@ class CatalogRepository:
             ORDER BY position ASC, id ASC
             """
         )
-        return [self._category_from_row(row) for row in rows]
+        categories = [self._category_from_row(row) for row in rows]
+
+        # Додатковий захист від старих дублікатів основної категорії «Рідини».
+        result: list[Category] = []
+        liquid_parent_added = False
+        for category in categories:
+            normalized = category.name.strip().casefold()
+            if normalized in {"рідини", "жидкости", "liquids"}:
+                if liquid_parent_added:
+                    continue
+                liquid_parent_added = True
+            result.append(category)
+        return result
 
     async def list_liquid_volume_categories(self) -> list[Category]:
         rows = await self._database.fetchall(
