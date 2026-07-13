@@ -108,6 +108,50 @@ class CatalogRepository:
         )
         return [self._category_from_row(row) for row in rows]
 
+    async def list_customer_categories(self) -> list[Category]:
+        """Повертає тільки верхній рівень каталогу для покупця.
+
+        Службові категорії об'ємів рідин залишаються доступними в адмін-панелі,
+        але не дублюються в головному меню покупця.
+        """
+        rows = await self._database.fetchall(
+            """
+            SELECT id, name, emoji, position, active
+            FROM categories
+            WHERE archived = 0
+              AND active = 1
+              AND lower(trim(name)) NOT IN (
+                  'рідини 10 мл', 'рідини 15 мл', 'рідини 30 мл',
+                  'жидкости 10 мл', 'жидкости 15 мл', 'жидкости 30 мл'
+              )
+            ORDER BY position ASC, id ASC
+            """
+        )
+        return [self._category_from_row(row) for row in rows]
+
+    async def list_liquid_volume_categories(self) -> list[Category]:
+        rows = await self._database.fetchall(
+            """
+            SELECT id, name, emoji, position, active
+            FROM categories
+            WHERE archived = 0
+              AND active = 1
+              AND lower(trim(name)) IN (
+                  'рідини 10 мл', 'рідини 15 мл', 'рідини 30 мл',
+                  'жидкости 10 мл', 'жидкости 15 мл', 'жидкости 30 мл'
+              )
+            ORDER BY
+                CASE
+                    WHEN name LIKE '%30%' THEN 1
+                    WHEN name LIKE '%15%' THEN 2
+                    WHEN name LIKE '%10%' THEN 3
+                    ELSE 4
+                END,
+                id ASC
+            """
+        )
+        return [self._category_from_row(row) for row in rows]
+
     async def get_category(self, category_id: int) -> Category | None:
         row = await self._database.fetchone(
             """

@@ -87,6 +87,8 @@ class UserHandlers:
         )
         self.router.callback_query.register(self.info, F.data == "u:info")
         self.router.callback_query.register(self.search_start, F.data == "u:search")
+        self.router.callback_query.register(self.liquids_menu, F.data == "u:liquids")
+        self.router.callback_query.register(self.liquid_category, F.data.startswith("u:liq:"))
         self.router.callback_query.register(self.category, F.data.startswith("u:c:"))
         self.router.callback_query.register(self.product, F.data.startswith("u:p:"))
         self.router.callback_query.register(
@@ -132,7 +134,7 @@ class UserHandlers:
 
     async def _show_catalog(self, message: Message) -> None:
         try:
-            categories = await self.catalog.list_categories()
+            categories = await self.catalog.list_customer_categories()
         except Exception:
             logger.exception("Не вдалося завантажити категорії")
             await replace_with_text(
@@ -216,7 +218,7 @@ class UserHandlers:
         if not await self._has_access(message.from_user.id):
             await self._show_age_gate(message)
             return
-        categories = await self.catalog.list_categories()
+        categories = await self.catalog.list_customer_categories()
         promotions_url = await self._safe_setting("promotions_url")
         cartridges_url = await self._safe_setting("cartridges_url")
         await message.answer(
@@ -285,6 +287,65 @@ class UserHandlers:
                 user_kb.back_home(),
             )
 
+    async def liquids_menu(self, callback: CallbackQuery) -> None:
+        await answer_callback_safely(callback)
+        if not await self._ensure_callback_access(callback) or not callback.message:
+            return
+        categories = await self.catalog.list_liquid_volume_categories()
+        text = (
+            "<b>💧 Рідини</b>\n\n"
+            "Оберіть потрібний об’єм:"
+        )
+        await replace_with_text(
+            callback.message,
+            text,
+            user_kb.liquid_volumes_menu(categories),
+        )
+
+    async def liquid_category(self, callback: CallbackQuery) -> None:
+        await answer_callback_safely(callback)
+        if not await self._ensure_callback_access(callback) or not callback.message:
+            return
+        parsed = parse_callback_ints(callback.data, "u:liq:", 2)
+        if parsed is None:
+            await self.liquids_menu(callback)
+            return
+        category_id, page = parsed
+        category = await self.catalog.get_category(category_id)
+        if category is None or not category.active:
+            await self.liquids_menu(callback)
+            return
+        page = max(0, page)
+        total = await self.catalog.count_products(category_id, only_in_stock=False)
+        total_pages = max(1, math.ceil(total / PRODUCTS_PER_PAGE))
+        page = min(page, total_pages - 1)
+        products = await self.catalog.list_products(
+            category_id,
+            limit=PRODUCTS_PER_PAGE,
+            offset=page * PRODUCTS_PER_PAGE,
+            only_in_stock=False,
+        )
+        currency = await self._safe_setting("currency") or "грн"
+        volume = next((v for v in ("30", "15", "10") if v in category.name), "")
+        text = (
+            f"<b>💧 Рідини {h(volume)} мл</b>\n\n"
+            "Оберіть рідину нижче. Смаки уточнюйте у продавця."
+        )
+        await replace_with_text(
+            callback.message,
+            text,
+            user_kb.products_menu(
+                products,
+                category_id=category_id,
+                page=page,
+                total_pages=total_pages,
+                currency=currency,
+                back_callback="u:liquids",
+                back_text="◀️ Об’єм рідини",
+                page_callback_prefix="u:liq",
+            ),
+        )
+
     async def category(self, callback: CallbackQuery) -> None:
         await answer_callback_safely(callback)
         if not await self._ensure_callback_access(callback) or not callback.message:
@@ -300,6 +361,15 @@ class UserHandlers:
         category = await self.catalog.get_category(category_id)
         if category is None or not category.active:
             await self._show_catalog(callback.message)
+            return
+
+        if category.name.strip().casefold() in {"рідини", "жидкости", "liquids"}:
+            categories = await self.catalog.list_liquid_volume_categories()
+            await replace_with_text(
+                callback.message,
+                "<b>💧 Рідини</b>\n\nОберіть потрібний об’єм:",
+                user_kb.liquid_volumes_menu(categories),
+            )
             return
 
         is_cartridges = category.name.strip().casefold() in {"картриджі", "картриджи"}
@@ -367,7 +437,14 @@ class UserHandlers:
             text=product_card_text(product, currency),
             photo_file_id=product.photo_file_id,
             reply_markup=user_kb.product_menu(
-                product, max(0, return_page), contact_url
+                product,
+                max(0, return_page),
+                contact_url,
+                back_callback_prefix=(
+                    "u:liq"
+                    if product.category_name.strip().casefold().startswith(("рідини ", "жидкости "))
+                    else "u:c"
+                ),
             ),
         )
 

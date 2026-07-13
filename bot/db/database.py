@@ -301,6 +301,7 @@ class Database:
         await self._seed_defaults()
         await self._migrate_ukrainian_defaults()
         await self._seed_cartridge_catalog()
+        await self._seed_liquid_catalog()
 
     async def _seed_defaults(self) -> None:
         async with self._lock:
@@ -482,6 +483,84 @@ class Database:
                     )
                 self.connection.commit()
 
+            await asyncio.to_thread(_seed)
+
+
+    async def _seed_liquid_catalog(self) -> None:
+        """Створює підкатегорії рідин 30/15/10 мл і додає товари зі списку магазину."""
+        liquids: dict[int, tuple[tuple[str, str], ...]] = {
+            10: (("Chaser", ""), ("Octobar", "NFT"), ("Flavorlab", "P1"), ("Flavorlab", "Puff"), ("Punch", "Neon")),
+            15: (("Vape Shot", ""), ("Chaser", "Special Berry"), ("Flavorlab", "FL350 mini"), ("Lucky", ""), ("Octobar", "NFT"), ("Octobar", "X"), ("Octobar", "Fresh & Sour")),
+            30: (
+                ("Chaser", "For Pods"), ("Chaser", "Lux"), ("Chaser", "Black"),
+                ("Chaser", "Special Berry"), ("Chaser", "Limitini Editini"),
+                ("Chaser", "Halloween Limited"), ("Chaser", "Mix (Ultra)"),
+                ("Chaser", "My Mint"), ("Chaser", "7 Years"),
+                ("Chaser", "Christmas"), ("Chaser", "Beat"), ("Nova", ""),
+                ("Lucky", ""), ("Octobar", "Twins"), ("Octobar", "Black Limit"),
+                ("Flavorlab", "Lady"), ("Flavorlab", "Triple"),
+                ("Flavorlab", "PE1000"), ("Flavorlab", "Aroma Max"),
+                ("Flavorlab", "FL350"), ("M-Cake", ""),
+            ),
+        }
+        async with self._lock:
+            def _seed() -> None:
+                parent = self.connection.execute(
+                    """SELECT id FROM categories WHERE archived = 0
+                    AND lower(trim(name)) IN ('рідини', 'жидкости', 'liquids')
+                    ORDER BY id ASC LIMIT 1"""
+                ).fetchone()
+                if parent is None:
+                    row = self.connection.execute("SELECT COALESCE(MAX(position), 0) + 1 FROM categories").fetchone()
+                    position = int(row[0]) if row else 1
+                    self.connection.execute(
+                        "INSERT INTO categories(name, emoji, position, active, archived) VALUES ('Рідини', '💧', ?, 1, 0)",
+                        (position,),
+                    )
+
+                max_row = self.connection.execute("SELECT COALESCE(MAX(position), 0) FROM categories").fetchone()
+                next_position = int(max_row[0]) if max_row else 0
+                category_ids: dict[int, int] = {}
+                for volume in (30, 15, 10):
+                    category_name = f"Рідини {volume} мл"
+                    row = self.connection.execute(
+                        "SELECT id FROM categories WHERE archived = 0 AND lower(trim(name)) = lower(?) ORDER BY id ASC LIMIT 1",
+                        (category_name,),
+                    ).fetchone()
+                    if row is None:
+                        next_position += 1
+                        cursor = self.connection.execute(
+                            "INSERT INTO categories(name, emoji, position, active, archived) VALUES (?, '💧', ?, 1, 0)",
+                            (category_name, next_position),
+                        )
+                        category_id = int(cursor.lastrowid)
+                    else:
+                        category_id = int(row[0])
+                        self.connection.execute("UPDATE categories SET active = 1, archived = 0, emoji = '💧' WHERE id = ?", (category_id,))
+                    category_ids[volume] = category_id
+
+                for volume, products in liquids.items():
+                    category_id = category_ids[volume]
+                    row = self.connection.execute("SELECT COALESCE(MAX(position), 0) FROM products WHERE category_id = ?", (category_id,)).fetchone()
+                    product_position = int(row[0]) if row else 0
+                    for brand, name in products:
+                        exists = self.connection.execute(
+                            """SELECT 1 FROM products WHERE category_id = ? AND archived = 0
+                            AND lower(trim(brand)) = lower(trim(?))
+                            AND lower(trim(name)) = lower(trim(?)) LIMIT 1""",
+                            (category_id, brand, name),
+                        ).fetchone()
+                        if exists:
+                            continue
+                        product_position += 1
+                        self.connection.execute(
+                            """INSERT INTO products(
+                                category_id, name, brand, price, description, photo_file_id,
+                                in_stock, position, quantity, variant_type, archived
+                            ) VALUES (?, ?, ?, '0', ?, NULL, 1, ?, 1, 'none', 0)""",
+                            (category_id, name, brand, f"Рідина {volume} мл. Наявність смаків уточнюйте у продавця.", product_position),
+                        )
+                self.connection.commit()
             await asyncio.to_thread(_seed)
 
     async def execute(self, query: str, parameters: Sequence[Any] = ()) -> int:
