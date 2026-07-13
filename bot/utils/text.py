@@ -15,6 +15,17 @@ def product_title(product: Product) -> str:
     return f"{prefix}{product.name}".strip()
 
 
+def display_price(price: object, currency: str) -> str:
+    raw = str(price).strip().replace(",", ".")
+    try:
+        numeric = float(raw)
+    except ValueError:
+        numeric = 0.0
+    if numeric <= 0:
+        return "Уточнюйте у продавця"
+    return f"{numeric:g} {h(currency)}"
+
+
 def product_card_text(product: Product, currency: str) -> str:
     available = product.in_stock
     status = "✅ Є в наявності" if available else "❌ Немає в наявності"
@@ -26,7 +37,7 @@ def product_card_text(product: Product, currency: str) -> str:
     return (
         f"<b>{h(product.category_emoji)} {h(product_title(product))}</b>\n\n"
         f"{description}\n\n"
-        f"💰 <b>Ціна:</b> {h(product.price)} {h(currency)}\n"
+        f"💰 <b>Ціна:</b> {display_price(product.price, currency)}\n"
         f"{status}\n\n"
         "🔞 <i>Продаж здійснюється лише повнолітнім. "
         "Продавець може попросити підтвердити вік.</i>"
@@ -45,7 +56,7 @@ def admin_product_text(product: Product, currency: str) -> str:
         f"Назва: <b>{h(product.name)}</b>\n"
         f"Бренд: {h(product.brand or '—')}\n"
         f"Категорія: {h(product.category_emoji)} {h(product.category_name)}\n"
-        f"Ціна: <b>{h(product.price)} {h(currency)}</b>\n"
+        f"Ціна: <b>{display_price(product.price, currency)}</b>\n"
         f"Статус: {status}\n"
         f"Кількість: <b>{product.quantity}</b>\n"
         f"Параметр замовлення: <b>{h(variant_type_title(product.variant_type))}</b>\n"
@@ -122,9 +133,12 @@ def cart_text(items: list[dict], currency: str) -> str:
         total += subtotal
         lines.append(f"<b>{index}. {h(item.get('title', 'Товар'))}</b>")
         lines.append(f"Кількість: <b>{qty}</b>")
-        lines.append(f"Сума: <b>{subtotal:g} {h(currency)}</b>")
+        if price > 0:
+            lines.append(f"Сума: <b>{subtotal:g} {h(currency)}</b>")
+        else:
+            lines.append("Ціна: <b>уточнюється у продавця</b>")
         lines.append("")
-    lines.append(f"<b>Разом: {total:g} {h(currency)}</b>")
+    lines.append(f"<b>Разом за товарами з указаною ціною: {total:g} {h(currency)}</b>")
     lines.append("")
     lines.append("ℹ️ Наявність потрібної кількості, кольори та смаки уточнюйте у продавця.")
     lines.append("🔞 Продаж здійснюється лише повнолітнім.")
@@ -132,10 +146,31 @@ def cart_text(items: list[dict], currency: str) -> str:
 
 
 def admin_cart_text(items: list[dict], currency: str, user_id: int, full_name: str, username: str | None) -> str:
+    """Чистий чек для продавця без покупецьких підказок та повторного заголовка."""
     username_text = f"@{h(username)}" if username else "не вказано"
-    return (
-        "<b>🛒 Нове комплексне замовлення</b>\n\n"
-        + cart_text(items, currency)
-        + f'\n\n👤 Покупець: <a href="tg://user?id={user_id}">{h(full_name)}</a>'
-        + f"\nUsername: {username_text}\nTelegram ID: <code>{user_id}</code>"
-    )
+    lines = ["<b>🛒 Нове комплексне замовлення</b>", ""]
+    total = 0.0
+    for index, item in enumerate(items, 1):
+        qty = max(1, int(item.get("quantity", 1)))
+        raw_price = str(item.get("price", "0")).replace(",", ".")
+        try:
+            price = float(raw_price)
+        except ValueError:
+            price = 0.0
+        subtotal = price * qty
+        total += subtotal
+        lines.append(f"<b>{index}. {h(item.get('title', 'Товар'))}</b>")
+        lines.append(f"Кількість: <b>{qty}</b>")
+        if price > 0:
+            lines.append(f"Сума: <b>{subtotal:g} {h(currency)}</b>")
+        else:
+            lines.append("Ціна: <b>уточнюється у продавця</b>")
+        lines.append("")
+    lines.append(f"<b>Разом за товарами з указаною ціною: {total:g} {h(currency)}</b>")
+    lines.extend([
+        "",
+        f'👤 Покупець: <a href="tg://user?id={user_id}">{h(full_name)}</a>',
+        f"Username: {username_text}",
+        f"Telegram ID: <code>{user_id}</code>",
+    ])
+    return "\n".join(lines)

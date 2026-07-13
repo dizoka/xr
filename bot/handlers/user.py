@@ -302,20 +302,35 @@ class UserHandlers:
             await self._show_catalog(callback.message)
             return
 
-        total = await self.catalog.count_products(category_id, only_in_stock=True)
+        is_cartridges = category.name.strip().casefold() in {"картриджі", "картриджи"}
+        # Для картриджів показуємо також позиції, яких зараз немає,
+        # щоб покупець бачив повний асортимент. Купити їх неможливо,
+        # доки продавець не перемкне статус на «Є в наявності».
+        only_in_stock = not is_cartridges
+        total = await self.catalog.count_products(category_id, only_in_stock=only_in_stock)
         total_pages = max(1, math.ceil(total / PRODUCTS_PER_PAGE))
         page = min(page, total_pages - 1)
         products = await self.catalog.list_products(
             category_id,
             limit=PRODUCTS_PER_PAGE,
             offset=page * PRODUCTS_PER_PAGE,
-            only_in_stock=True,
+            only_in_stock=only_in_stock,
         )
         currency = await self._safe_setting("currency") or "грн"
-        empty_text = (
-            "\n\nУ цій категорії поки немає доступних товарів." if not products else ""
+        cartridges_url = (
+            await self._safe_setting("cartridges_url") if is_cartridges else ""
         )
-        text = f"<b>{h(category.emoji)} {h(category.name)}</b>{empty_text}\n\nОберіть товар:"
+        empty_text = (
+            "\n\nУ цій категорії поки немає товарів для додавання в кошик."
+            if not products
+            else ""
+        )
+        extra_hint = (
+            "\n\nОберіть картридж нижче, щоб додати його в кошик."
+            if is_cartridges
+            else "\n\nОберіть товар:"
+        )
+        text = f"<b>{h(category.emoji)} {h(category.name)}</b>{empty_text}{extra_hint}"
         await replace_with_text(
             callback.message,
             text,
@@ -325,6 +340,7 @@ class UserHandlers:
                 page=page,
                 total_pages=total_pages,
                 currency=currency,
+                external_catalog_url=cartridges_url,
             ),
         )
 
@@ -339,7 +355,7 @@ class UserHandlers:
             return
         product_id, return_page = parsed
         product = await self.catalog.get_product(product_id)
-        if product is None or not product.in_stock:
+        if product is None:
             await self._show_catalog(callback.message)
             return
 

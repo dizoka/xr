@@ -53,16 +53,11 @@ def categories_menu(
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     safe_promotions_url = _safe_contact_url(promotions_url)
-    safe_cartridges_url = _safe_contact_url(cartridges_url)
     for category in categories:
         category_name = category.name.strip().casefold()
         if category_name == "акції" and safe_promotions_url:
             builder.button(
                 text=f"{category.emoji} {category.name}", url=safe_promotions_url
-            )
-        elif category_name in {"картриджі", "картриджи"} and safe_cartridges_url:
-            builder.button(
-                text=f"{category.emoji} {category.name}", url=safe_cartridges_url
             )
         else:
             builder.button(
@@ -81,11 +76,15 @@ def products_menu(
     page: int,
     total_pages: int,
     currency: str,
+    external_catalog_url: str = "",
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for product in products:
+        label = product_title(product)
+        if not product.in_stock:
+            label = f"❌ {label} — немає"
         builder.button(
-            text=product_title(product),
+            text=label,
             callback_data=f"u:p:{product.id}:{page}",
         )
     builder.adjust(1)
@@ -109,6 +108,15 @@ def products_menu(
         )
     if navigation:
         builder.row(*navigation)
+
+    safe_external_url = _safe_contact_url(external_catalog_url)
+    if safe_external_url:
+        builder.row(
+            InlineKeyboardButton(
+                text="📋 Переглянути всі картриджі",
+                url=safe_external_url,
+            )
+        )
 
     builder.row(
         InlineKeyboardButton(text="◀️ Категорії", callback_data="u:catalog"),

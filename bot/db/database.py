@@ -300,6 +300,7 @@ class Database:
 
         await self._seed_defaults()
         await self._migrate_ukrainian_defaults()
+        await self._seed_cartridge_catalog()
 
     async def _seed_defaults(self) -> None:
         async with self._lock:
@@ -372,6 +373,116 @@ class Database:
                 self.connection.commit()
 
             await asyncio.to_thread(_migrate)
+
+
+    async def _seed_cartridge_catalog(self) -> None:
+        """Одноразово додає картриджі зі списку магазину без ручної роботи в Turso.
+
+        Додавання ідемпотентне: якщо товар з такою самою назвою вже існує
+        у категорії картриджів, повторно він не створюється. Для всіх
+        картриджів зі списку автоматично встановлюється ціна 150 грн.
+        """
+        cartridges = (
+            ("OXVA", "Xlim 0.4 Ω", True),
+            ("OXVA", "Xlim 0.6 Ω", True),
+            ("OXVA", "Xlim 0.8 Ω", True),
+            ("OXVA", "NeXLIM 0.6 Ω (2 мл)", False),
+            ("OXVA", "NeXLIM 0.6 Ω (4 мл)", False),
+            ("OXVA", "NeXLIM 0.8 Ω (2 мл)", True),
+            ("Vaporesso", "XROS 0.4 Ω (3 мл)", True),
+            ("Vaporesso", "XROS 0.6 Ω (2 мл)", True),
+            ("Vaporesso", "XROS 0.6 Ω (3 мл)", False),
+            ("Vaporesso", "XROS 0.8 Ω (2 мл)", True),
+            ("Voopoo", "Vinci 0.8 Ω", True),
+            ("Voopoo", "VMATE 0.7 Ω", False),
+            ("Lost Vape", "0.6 Ω", True),
+            ("Lost Vape", "0.8 Ω", True),
+            ("Voopoo", "Argus 0.7 Ω", False),
+            ("Voopoo", "Argus 0.4 Ω", True),
+            ("Elf Bar", "ELFX 0.6 Ω", True),
+        )
+
+        async with self._lock:
+            def _seed() -> None:
+                category = self.connection.execute(
+                    """
+                    SELECT id FROM categories
+                    WHERE archived = 0
+                      AND (name = 'Картриджі' OR name = 'Картриджи' OR lower(name) LIKE '%cartridge%')
+                    ORDER BY id ASC LIMIT 1
+                    """
+                ).fetchone()
+                if category is None:
+                    row = self.connection.execute(
+                        "SELECT COALESCE(MAX(position), 0) + 1 FROM categories"
+                    ).fetchone()
+                    position = int(row[0]) if row else 1
+                    cursor = self.connection.execute(
+                        """
+                        INSERT INTO categories(name, emoji, position, active, archived)
+                        VALUES ('Картриджі', '🧩', ?, 1, 0)
+                        """,
+                        (position,),
+                    )
+                    category_id = int(cursor.lastrowid)
+                else:
+                    category_id = int(category[0])
+
+                row = self.connection.execute(
+                    "SELECT COALESCE(MAX(position), 0) FROM products WHERE category_id = ?",
+                    (category_id,),
+                ).fetchone()
+                position = int(row[0]) if row else 0
+
+                for brand, name, in_stock in cartridges:
+                    exists = self.connection.execute(
+                        """
+                        SELECT 1 FROM products
+                        WHERE category_id = ? AND archived = 0
+                          AND lower(trim(brand)) = lower(trim(?))
+                          AND lower(trim(name)) = lower(trim(?))
+                        LIMIT 1
+                        """,
+                        (category_id, brand, name),
+                    ).fetchone()
+                    if exists:
+                        self.connection.execute(
+                            """
+                            UPDATE products
+                            SET price = '150',
+                                description = CASE
+                                    WHEN description IS NULL OR trim(description) = ''
+                                         OR description LIKE '%точну ціну%'
+                                    THEN 'Сумісність і наявність уточнюйте у продавця.'
+                                    ELSE description
+                                END
+                            WHERE category_id = ? AND archived = 0
+                              AND lower(trim(brand)) = lower(trim(?))
+                              AND lower(trim(name)) = lower(trim(?))
+                            """,
+                            (category_id, brand, name),
+                        )
+                        continue
+                    position += 1
+                    self.connection.execute(
+                        """
+                        INSERT INTO products(
+                            category_id, name, brand, price, description, photo_file_id,
+                            in_stock, position, quantity, variant_type, archived
+                        ) VALUES (?, ?, ?, '150', ?, NULL, ?, ?, 1, 'none', 0)
+                        """,
+                        (
+                            category_id,
+                            name,
+                            brand,
+                            "Сумісність і наявність уточнюйте у продавця.",
+                            1 if in_stock else 0,
+                            position,
+                        ),
+                    )
+                self.connection.commit()
+
+            await asyncio.to_thread(_seed)
 
     async def execute(self, query: str, parameters: Sequence[Any] = ()) -> int:
         async with self._lock:
