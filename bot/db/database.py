@@ -301,7 +301,7 @@ class Database:
         await self._seed_defaults()
         await self._migrate_ukrainian_defaults()
         await self._seed_cartridge_catalog()
-        await self._seed_liquid_catalog()
+        await self._repair_liquid_catalog()
 
     async def _seed_defaults(self) -> None:
         async with self._lock:
@@ -486,32 +486,16 @@ class Database:
             await asyncio.to_thread(_seed)
 
 
-    async def _seed_liquid_catalog(self) -> None:
-        """Одноразово перебудовує рідини: одна категорія та віртуальні об'єми."""
-        liquids: dict[int, tuple[tuple[str, str], ...]] = {
-            10: (("Chaser", ""), ("Octobar", "NFT"), ("Flavorlab", "P1"), ("Flavorlab", "Puff"), ("Punch", "Neon")),
-            15: (("Vape Shot", ""), ("Chaser", "Special Berry"), ("Flavorlab", "FL350 mini"), ("Lucky", ""), ("Octobar", "NFT"), ("Octobar", "X"), ("Octobar", "Fresh & Sour")),
-            30: (
-                ("Chaser", "For Pods"), ("Chaser", "Lux"), ("Chaser", "Black"),
-                ("Chaser", "Special Berry"), ("Chaser", "Limitini Editini"),
-                ("Chaser", "Halloween Limited"), ("Chaser", "Mix (Ultra)"),
-                ("Chaser", "My Mint"), ("Chaser", "7 Years"),
-                ("Chaser", "Christmas"), ("Chaser", "Beat"), ("Nova", ""),
-                ("Lucky", ""), ("Octobar", "Twins"), ("Octobar", "Black Limit"),
-                ("Flavorlab", "Lady"), ("Flavorlab", "Triple"),
-                ("Flavorlab", "PE1000"), ("Flavorlab", "Aroma Max"),
-                ("Flavorlab", "FL350"), ("M-Cake", ""),
-            ),
-        }
-        async with self._lock:
-            def _seed() -> None:
-                migration_key = "liquid_catalog_single_category_v3"
-                done = self.connection.execute(
-                    "SELECT value FROM settings WHERE key = ?", (migration_key,)
-                ).fetchone()
-                if done and str(done[0]) == "1":
-                    return
+    async def _repair_liquid_catalog(self) -> None:
+        """Прибирає помилково створені рідини й дублікати категорій.
 
+        Залишає одну категорію «Рідини», повертає в неї старі користувацькі
+        товари та розкладає їх по віртуальних об'ємах 30/15/10 мл.
+        Автоматично додані раніше товари з міткою ``[volume:...]``
+        архівуються, тому лічильник товарів повертається до реального.
+        """
+        async with self._lock:
+            def _repair() -> None:
                 rows = self.connection.execute(
                     """SELECT id, name FROM categories
                     WHERE archived = 0 AND (
@@ -524,15 +508,17 @@ class Database:
 
                 parent_id = None
                 for category_id, name in rows:
-                    if str(name).strip().casefold() in {"рідини", "жидкости", "liquids"}:
+                    if str(name).strip().casefold() in {'рідини', 'жидкости', 'liquids'}:
                         parent_id = int(category_id)
                         break
+
                 if parent_id is None:
                     pos = self.connection.execute(
                         "SELECT COALESCE(MAX(position), 0) + 1 FROM categories"
                     ).fetchone()[0]
                     cur = self.connection.execute(
-                        "INSERT INTO categories(name, emoji, position, active, archived) VALUES ('Рідини', '💧', ?, 1, 0)",
+                        "INSERT INTO categories(name, emoji, position, active, archived) "
+                        "VALUES ('Рідини', '💧', ?, 1, 0)",
                         (int(pos),),
                     )
                     parent_id = int(cur.lastrowid)
@@ -542,47 +528,63 @@ class Database:
                     (parent_id,),
                 )
 
-                all_liquid_ids = [int(row[0]) for row in rows]
-                if parent_id not in all_liquid_ids:
-                    all_liquid_ids.append(parent_id)
+                liquid_ids = [int(row[0]) for row in rows]
+                if parent_id not in liquid_ids:
+                    liquid_ids.append(parent_id)
 
-                # Видаляємо всі старі товари рідин і службові категорії об'ємів.
-                placeholders = ",".join("?" for _ in all_liquid_ids)
+                placeholders = ','.join('?' for _ in liquid_ids)
+
+                # Прибираємо тільки ті товари, які бот помилково додавав автоматично.
                 self.connection.execute(
-                    f"UPDATE products SET archived=1, in_stock=0 WHERE category_id IN ({placeholders})",
-                    tuple(all_liquid_ids),
+                    f"""UPDATE products
+                    SET archived=1, in_stock=0
+                    WHERE category_id IN ({placeholders})
+                      AND description LIKE '[volume:%]%'""",
+                    tuple(liquid_ids),
                 )
-                for category_id in all_liquid_ids:
+
+                # Повертаємо старі реальні товари користувача в одну категорію.
+                self.connection.execute(
+                    f"""UPDATE products
+                    SET category_id=?, archived=0
+                    WHERE category_id IN ({placeholders})
+                      AND description NOT LIKE '[volume:%]%'""",
+                    (parent_id, *liquid_ids),
+                )
+
+                # Розподіляємо старі товари по об'ємах. Якщо об'єм не вказаний,
+                # за замовчуванням відносимо до 30 мл — це можна змінити пізніше.
+                self.connection.execute(
+                    """UPDATE products
+                    SET description =
+                        CASE
+                            WHEN lower(name || ' ' || brand || ' ' || description) LIKE '%10 мл%'
+                              OR lower(name || ' ' || brand || ' ' || description) LIKE '%10ml%'
+                                THEN '[volume:10] ' || description
+                            WHEN lower(name || ' ' || brand || ' ' || description) LIKE '%15 мл%'
+                              OR lower(name || ' ' || brand || ' ' || description) LIKE '%15ml%'
+                                THEN '[volume:15] ' || description
+                            ELSE '[volume:30] ' || description
+                        END
+                    WHERE category_id=? AND archived=0
+                      AND description NOT LIKE '[volume:%]%'""",
+                    (parent_id,),
+                )
+
+                # Усі дублікати категорій прибираємо з каталогу й адмін-панелі.
+                for category_id in liquid_ids:
                     if category_id != parent_id:
                         self.connection.execute(
                             "UPDATE categories SET active=0, archived=1 WHERE id=?",
                             (category_id,),
                         )
 
-                position = 0
-                for volume in (30, 15, 10):
-                    for brand, name in liquids[volume]:
-                        position += 1
-                        self.connection.execute(
-                            """INSERT INTO products(
-                                category_id, name, brand, price, description, photo_file_id,
-                                in_stock, position, quantity, variant_type, archived
-                            ) VALUES (?, ?, ?, '0', ?, NULL, 1, ?, 1, 'none', 0)""",
-                            (
-                                parent_id,
-                                name,
-                                brand,
-                                f"[volume:{volume}] Рідина {volume} мл. Наявність смаків уточнюйте у продавця.",
-                                position,
-                            ),
-                        )
-
                 self.connection.execute(
-                    "INSERT OR REPLACE INTO settings(key, value) VALUES (?, '1')",
-                    (migration_key,),
+                    "INSERT OR REPLACE INTO settings(key, value) VALUES ('liquid_catalog_repaired_v5', '1')"
                 )
                 self.connection.commit()
-            await asyncio.to_thread(_seed)
+
+            await asyncio.to_thread(_repair)
 
     async def execute(self, query: str, parameters: Sequence[Any] = ()) -> int:
         async with self._lock:

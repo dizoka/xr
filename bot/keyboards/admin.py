@@ -200,6 +200,60 @@ def admin_products_list(
     return builder.as_markup()
 
 
+
+def admin_liquid_volumes_menu(category_id: int) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for volume in (30, 15, 10):
+        builder.button(
+            text=f"💧 {volume} мл",
+            callback_data=f"a:liqv:{category_id}:{volume}:0",
+        )
+    builder.button(text="◀️ Категорії", callback_data="a:products")
+    builder.button(text="🏠 Адмін", callback_data="a:home")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def admin_liquid_products_list(
+    products: list[Product],
+    *,
+    category_id: int,
+    volume: int,
+    page: int,
+    total_pages: int,
+    currency: str,
+) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for product in products:
+        status = "✅" if product.in_stock else "⛔"
+        builder.button(
+            text=f"{status} {product_title(product)} — {product.price} {currency}",
+            callback_data=f"a:p:{product.id}:{page}",
+        )
+    builder.adjust(1)
+
+    navigation: list[InlineKeyboardButton] = []
+    if page > 0:
+        navigation.append(InlineKeyboardButton(
+            text="◀️", callback_data=f"a:liqv:{category_id}:{volume}:{page - 1}"
+        ))
+    if total_pages > 1:
+        navigation.append(InlineKeyboardButton(
+            text=f"{page + 1}/{total_pages}", callback_data="noop"
+        ))
+    if page + 1 < total_pages:
+        navigation.append(InlineKeyboardButton(
+            text="▶️", callback_data=f"a:liqv:{category_id}:{volume}:{page + 1}"
+        ))
+    if navigation:
+        builder.row(*navigation)
+
+    builder.row(InlineKeyboardButton(
+        text="◀️ Об'єми рідин", callback_data=f"a:plist:{category_id}:0"
+    ))
+    builder.row(InlineKeyboardButton(text="🏠 Адмін", callback_data="a:home"))
+    return builder.as_markup()
+
 def promotions_products_menu(category_id: int, has_url: bool) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(

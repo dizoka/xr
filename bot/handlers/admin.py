@@ -129,6 +129,9 @@ class AdminHandlers:
             self.products_list, F.data.startswith("a:plist:")
         )
         self.router.callback_query.register(
+            self.admin_liquid_products, F.data.startswith("a:liqv:")
+        )
+        self.router.callback_query.register(
             self.product_add_start, F.data.startswith("a:padd:")
         )
         self.router.callback_query.register(
@@ -526,6 +529,15 @@ class AdminHandlers:
             await answer_callback_safely(callback)
             return
 
+        if category_name in {"рідини", "жидкости", "liquids"}:
+            await replace_with_text(
+                callback.message,
+                "<b>💧 Рідини</b>\n\nОберіть об'єм:",
+                admin_kb.admin_liquid_volumes_menu(category_id),
+            )
+            await answer_callback_safely(callback)
+            return
+
         if category_name in {"картриджі", "картриджи"}:
             cartridges_url = await self.catalog.get_setting("cartridges_url", "")
             text = (
@@ -563,6 +575,40 @@ class AdminHandlers:
                 page=page,
                 total_pages=total_pages,
                 currency=currency,
+            ),
+        )
+        await answer_callback_safely(callback)
+
+    async def admin_liquid_products(
+        self, callback: CallbackQuery, is_owner_admin: bool = False
+    ) -> None:
+        if not callback.data or not callback.message:
+            return
+        _, _, category_id_raw, volume_raw, page_raw = callback.data.split(":", maxsplit=4)
+        category_id = int(category_id_raw)
+        volume = int(volume_raw)
+        page = max(0, int(page_raw))
+        if volume not in {10, 15, 30}:
+            await answer_callback_safely(callback, "Невідомий об'єм", show_alert=True)
+            return
+
+        total = await self.catalog.count_liquid_products(category_id, volume)
+        total_pages = max(1, math.ceil(total / PRODUCTS_PER_PAGE))
+        page = min(page, total_pages - 1)
+        products = await self.catalog.list_liquid_products(
+            category_id, volume, limit=PRODUCTS_PER_PAGE,
+            offset=page * PRODUCTS_PER_PAGE,
+        )
+        currency = await self.catalog.get_setting("currency", "грн")
+        text = f"<b>💧 Рідини {volume} мл</b>\n\nТоварів: {total}"
+        if not products:
+            text += "\n\nТоварів у цьому об'ємі поки немає."
+        await replace_with_text(
+            callback.message,
+            text,
+            admin_kb.admin_liquid_products_list(
+                products, category_id=category_id, volume=volume, page=page,
+                total_pages=total_pages, currency=currency,
             ),
         )
         await answer_callback_safely(callback)

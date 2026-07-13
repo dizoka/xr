@@ -106,7 +106,27 @@ class CatalogRepository:
             ORDER BY position ASC, id ASC
             """
         )
-        return [self._category_from_row(row) for row in rows]
+        categories = [self._category_from_row(row) for row in rows]
+
+        # Захист від старих дублікатів рідин навіть до завершення міграції.
+        result: list[Category] = []
+        liquid_added = False
+        for category in categories:
+            normalized = category.name.strip().casefold()
+            is_liquid = (
+                normalized in {"рідини", "жидкости", "liquids"}
+                or normalized.startswith("рідини ")
+                or normalized.startswith("жидкости ")
+                or normalized.startswith("liquids ")
+            )
+            if is_liquid:
+                if normalized not in {"рідини", "жидкости", "liquids"}:
+                    continue
+                if liquid_added:
+                    continue
+                liquid_added = True
+            result.append(category)
+        return result
 
     async def list_customer_categories(self) -> list[Category]:
         """Повертає тільки верхній рівень каталогу для покупця.
