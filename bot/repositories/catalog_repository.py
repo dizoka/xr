@@ -24,6 +24,7 @@ class CatalogRepository:
             emoji=str(row["emoji"]),
             position=int(row["position"]),
             active=bool(row["active"]),
+            parent_id=(int(row["parent_id"]) if row.get("parent_id") is not None else None),
         )
 
     @staticmethod
@@ -96,109 +97,38 @@ class CatalogRepository:
             (user_id,),
         )
 
-    async def list_categories(self, include_inactive: bool = False) -> list[Category]:
+    async def list_categories(
+        self,
+        include_inactive: bool = False,
+        parent_id: int | None = None,
+    ) -> list[Category]:
         active_filter = "" if include_inactive else "AND active = 1"
+        parent_filter = "parent_id IS NULL" if parent_id is None else "parent_id = ?"
+        params: tuple[Any, ...] = () if parent_id is None else (parent_id,)
         rows = await self._database.fetchall(
             f"""
-            SELECT id, name, emoji, position, active
+            SELECT id, name, emoji, position, active, parent_id
             FROM categories
-            WHERE archived = 0 {active_filter}
+            WHERE archived = 0 AND {parent_filter} {active_filter}
             ORDER BY position ASC, id ASC
-            """
+            """,
+            params,
         )
-        categories = [self._category_from_row(row) for row in rows]
+        return [self._category_from_row(row) for row in rows]
 
-        # Захист від старих дублікатів рідин навіть до завершення міграції.
-        result: list[Category] = []
-        liquid_added = False
-        for category in categories:
-            normalized = category.name.strip().casefold()
-            is_liquid = (
-                normalized in {"рідини", "жидкости", "liquids"}
-                or normalized.startswith("рідини ")
-                or normalized.startswith("жидкости ")
-                or normalized.startswith("liquids ")
-            )
-            if is_liquid:
-                if normalized not in {"рідини", "жидкости", "liquids"}:
-                    continue
-                if liquid_added:
-                    continue
-                liquid_added = True
-            result.append(category)
-        return result
-
-    async def list_customer_categories(self) -> list[Category]:
-        """Повертає тільки верхній рівень каталогу для покупця.
-
-        Службові категорії об'ємів рідин залишаються доступними в адмін-панелі,
-        але не дублюються в головному меню покупця.
-        """
+    async def list_all_categories(self, include_inactive: bool = False) -> list[Category]:
+        active_filter = "" if include_inactive else "AND active = 1"
         rows = await self._database.fetchall(
-            """
-            SELECT id, name, emoji, position, active
-            FROM categories
-            WHERE archived = 0
-              AND active = 1
-              AND lower(trim(name)) NOT IN (
-                  'рідини 10 мл', 'рідини 15 мл', 'рідини 30 мл',
-                  'жидкости 10 мл', 'жидкости 15 мл', 'жидкости 30 мл'
-              )
-            ORDER BY position ASC, id ASC
-            """
+            f"""SELECT id, name, emoji, position, active, parent_id
+                FROM categories WHERE archived = 0 {active_filter}
+                ORDER BY COALESCE(parent_id, 0), position, id"""
         )
-        categories = [self._category_from_row(row) for row in rows]
-
-        # Додатковий захист від старих дублікатів основної категорії «Рідини».
-        result: list[Category] = []
-        liquid_parent_added = False
-        for category in categories:
-            normalized = category.name.strip().casefold()
-            if normalized in {"рідини", "жидкости", "liquids"}:
-                if liquid_parent_added:
-                    continue
-                liquid_parent_added = True
-            result.append(category)
-        return result
-
-    async def get_liquid_parent_category(self) -> Category | None:
-        row = await self._database.fetchone(
-            """SELECT id, name, emoji, position, active FROM categories
-            WHERE archived = 0 AND active = 1
-              AND lower(trim(name)) IN ('рідини', 'жидкости', 'liquids')
-            ORDER BY id ASC LIMIT 1"""
-        )
-        return self._category_from_row(row) if row else None
-
-    async def count_liquid_products(self, category_id: int, volume: int) -> int:
-        row = await self._database.fetchone(
-            """SELECT COUNT(*) AS total FROM products
-            WHERE category_id = ? AND archived = 0
-              AND description LIKE ?""",
-            (category_id, f"[volume:{volume}]%"),
-        )
-        return int(row["total"]) if row else 0
-
-    async def list_liquid_products(
-        self, category_id: int, volume: int, *, limit: int, offset: int
-    ) -> list[Product]:
-        rows = await self._database.fetchall(
-            """SELECT
-                p.id, p.category_id, p.name, p.brand, p.price, p.description,
-                p.photo_file_id, p.in_stock, p.position, p.quantity, p.variant_type,
-                c.name AS category_name, c.emoji AS category_emoji
-            FROM products p JOIN categories c ON c.id = p.category_id
-            WHERE p.category_id = ? AND p.archived = 0 AND c.archived = 0
-              AND p.description LIKE ?
-            ORDER BY p.position ASC, p.id ASC LIMIT ? OFFSET ?""",
-            (category_id, f"[volume:{volume}]%", limit, offset),
-        )
-        return [self._product_from_row(row) for row in rows]
+        return [self._category_from_row(row) for row in rows]
 
     async def get_category(self, category_id: int) -> Category | None:
         row = await self._database.fetchone(
             """
-            SELECT id, name, emoji, position, active
+            SELECT id, name, emoji, position, active, parent_id
             FROM categories
             WHERE id = ? AND archived = 0
             """,
@@ -206,18 +136,38 @@ class CatalogRepository:
         )
         return self._category_from_row(row) if row else None
 
-    async def add_category(self, name: str, emoji: str) -> int:
-        row = await self._database.fetchone(
-            "SELECT COALESCE(MAX(position), 0) + 1 AS next_position FROM categories"
-        )
+    async def add_category(
+        self, name: str, emoji: str, parent_id: int | None = None
+    ) -> int:
+        if parent_id is not None and await self.get_category(parent_id) is None:
+            raise ValueError("Батьківську категорію не знайдено")
+        if parent_id is None:
+            row = await self._database.fetchone(
+                "SELECT COALESCE(MAX(position), 0) + 1 AS next_position FROM categories WHERE parent_id IS NULL"
+            )
+        else:
+            row = await self._database.fetchone(
+                "SELECT COALESCE(MAX(position), 0) + 1 AS next_position FROM categories WHERE parent_id = ?",
+                (parent_id,),
+            )
         position = int(row["next_position"]) if row else 1
         return await self._database.execute(
             """
-            INSERT INTO categories(name, emoji, position, active, archived)
-            VALUES (?, ?, ?, 1, 0)
+            INSERT INTO categories(name, emoji, position, active, archived, parent_id)
+            VALUES (?, ?, ?, 1, 0, ?)
             """,
-            (name, emoji, position),
+            (name, emoji, position, parent_id),
         )
+
+    async def count_child_categories(
+        self, category_id: int, include_inactive: bool = True
+    ) -> int:
+        active_filter = "" if include_inactive else "AND active = 1"
+        row = await self._database.fetchone(
+            f"SELECT COUNT(*) AS total FROM categories WHERE parent_id = ? AND archived = 0 {active_filter}",
+            (category_id,),
+        )
+        return int(row["total"]) if row else 0
 
     async def update_category_name(self, category_id: int, name: str) -> None:
         await self._database.execute(
@@ -242,19 +192,25 @@ class CatalogRepository:
         )
 
     async def delete_category(self, category_id: int) -> None:
-        # М'яке видалення зберігає старі замовлення та зв'язки в базі.
-        await self._database.execute(
-            "UPDATE categories SET archived = 1, active = 0 WHERE id = ?",
+        # Архівуємо категорію, усі вкладені категорії та їхні товари.
+        rows = await self._database.fetchall(
+            """WITH RECURSIVE tree(id) AS (
+                   SELECT id FROM categories WHERE id = ?
+                   UNION ALL
+                   SELECT c.id FROM categories c JOIN tree t ON c.parent_id = t.id
+               ) SELECT id FROM tree""",
             (category_id,),
         )
-        await self._database.execute(
-            """
-            UPDATE products
-            SET archived = 1, in_stock = 0, quantity = 0
-            WHERE category_id = ?
-            """,
-            (category_id,),
-        )
+        ids = [int(row["id"]) for row in rows]
+        for item_id in ids:
+            await self._database.execute(
+                "UPDATE categories SET archived = 1, active = 0 WHERE id = ?",
+                (item_id,),
+            )
+            await self._database.execute(
+                "UPDATE products SET archived = 1, in_stock = 0, quantity = 0 WHERE category_id = ?",
+                (item_id,),
+            )
 
     async def count_products(
         self, category_id: int, only_in_stock: bool = False

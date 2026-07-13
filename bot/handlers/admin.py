@@ -103,10 +103,13 @@ class AdminHandlers:
         self.router.callback_query.register(self.home, F.data == "a:home")
         self.router.callback_query.register(self.categories, F.data == "a:cats")
         self.router.callback_query.register(
-            self.category_add_start, F.data == "a:catadd"
+            self.category_add_start, F.data.startswith("a:catadd")
         )
         self.router.callback_query.register(
             self.category_detail, F.data.startswith("a:cat:")
+        )
+        self.router.callback_query.register(
+            self.subcategories, F.data.startswith("a:subcats:")
         )
         self.router.callback_query.register(
             self.category_name_start, F.data.startswith("a:catname:")
@@ -127,9 +130,6 @@ class AdminHandlers:
         self.router.callback_query.register(self.products, F.data == "a:products")
         self.router.callback_query.register(
             self.products_list, F.data.startswith("a:plist:")
-        )
-        self.router.callback_query.register(
-            self.admin_liquid_products, F.data.startswith("a:liqv:")
         )
         self.router.callback_query.register(
             self.product_add_start, F.data.startswith("a:padd:")
@@ -327,7 +327,7 @@ class AdminHandlers:
 
     # Categories
     async def categories(self, callback: CallbackQuery) -> None:
-        categories = await self.catalog.list_categories(include_inactive=True)
+        categories = await self.catalog.list_categories(include_inactive=True, parent_id=None)
         if callback.message:
             await replace_with_text(
                 callback.message,
@@ -339,6 +339,9 @@ class AdminHandlers:
     async def category_add_start(
         self, callback: CallbackQuery, state: FSMContext
     ) -> None:
+        parts = (callback.data or "").split(":")
+        parent_id = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else None
+        await state.update_data(parent_id=parent_id)
         await state.set_state(AddCategoryStates.emoji)
         if callback.message:
             await replace_with_text(
@@ -365,13 +368,31 @@ class AdminHandlers:
             await message.answer("Назва має містити від 2 до 50 символів.")
             return
         data = await state.get_data()
-        await self.catalog.add_category(name=name, emoji=str(data["emoji"]))
+        parent_id = data.get("parent_id")
+        await self.catalog.add_category(name=name, emoji=str(data["emoji"]), parent_id=(int(parent_id) if parent_id is not None else None))
         await state.clear()
-        categories = await self.catalog.list_categories(include_inactive=True)
+        parent_id = data.get("parent_id")
+        categories = await self.catalog.list_categories(include_inactive=True, parent_id=(int(parent_id) if parent_id is not None else None))
         await message.answer(
             "✅ Категорію додано.",
-            reply_markup=admin_kb.categories_list(categories),
+            reply_markup=admin_kb.categories_list(categories, int(parent_id) if parent_id is not None else None),
         )
+
+    async def subcategories(self, callback: CallbackQuery) -> None:
+        if not callback.data or not callback.message:
+            return
+        parent_id = int(callback.data.rsplit(":", 1)[1])
+        parent = await self.catalog.get_category(parent_id)
+        if parent is None:
+            await answer_callback_safely(callback, "Категорію не знайдено", show_alert=True)
+            return
+        children = await self.catalog.list_categories(include_inactive=True, parent_id=parent_id)
+        await replace_with_text(
+            callback.message,
+            f"<b>📂 {h(parent.name)} — підкатегорії</b>",
+            admin_kb.categories_list(children, parent_id),
+        )
+        await answer_callback_safely(callback)
 
     async def category_detail(self, callback: CallbackQuery) -> None:
         if not callback.data or not callback.message:
@@ -384,10 +405,12 @@ class AdminHandlers:
             )
             return
         product_count = await self.catalog.count_products(category_id)
+        child_count = await self.catalog.count_child_categories(category_id)
         status = "✅ Відображається" if category.active else "⛔ Прихована"
         text = (
             f"<b>{h(category.emoji)} {h(category.name)}</b>\n\n"
             f"Статус: {status}\n"
+            f"Підкатегорій: <b>{child_count}</b>\n"
             f"Товарів: <b>{product_count}</b>\n\n"
             "Під час видалення категорії також буде видалено всі товари в ній."
         )
@@ -488,7 +511,7 @@ class AdminHandlers:
     async def products(
         self, callback: CallbackQuery, is_owner_admin: bool = False
     ) -> None:
-        categories = await self.catalog.list_categories(include_inactive=True)
+        categories = await self.catalog.list_categories(include_inactive=True, parent_id=None)
         if callback.message:
             await replace_with_text(
                 callback.message,
@@ -529,15 +552,6 @@ class AdminHandlers:
             await answer_callback_safely(callback)
             return
 
-        if category_name in {"рідини", "жидкости", "liquids"}:
-            await replace_with_text(
-                callback.message,
-                "<b>💧 Рідини</b>\n\nОберіть об'єм:",
-                admin_kb.admin_liquid_volumes_menu(category_id),
-            )
-            await answer_callback_safely(callback)
-            return
-
         if category_name in {"картриджі", "картриджи"}:
             cartridges_url = await self.catalog.get_setting("cartridges_url", "")
             text = (
@@ -554,6 +568,9 @@ class AdminHandlers:
             await answer_callback_safely(callback)
             return
 
+        children = await self.catalog.list_categories(
+            include_inactive=True, parent_id=category_id
+        )
         total = await self.catalog.count_products(category_id)
         total_pages = max(1, math.ceil(total / PRODUCTS_PER_PAGE))
         page = min(page, total_pages - 1)
@@ -563,52 +580,23 @@ class AdminHandlers:
             offset=page * PRODUCTS_PER_PAGE,
         )
         currency = await self.catalog.get_setting("currency", "грн")
-        text = f"<b>{h(category.emoji)} {h(category.name)}</b>\n\nТоварів: {total}"
-        if not products:
-            text += "\n\nТоварів поки немає — додайте перший."
+        text = (
+            f"<b>{h(category.emoji)} {h(category.name)}</b>\n\n"
+            f"Підкатегорій: {len(children)}\nТоварів: {total}"
+        )
+        if not products and not children:
+            text += "\n\nТут поки порожньо."
         await replace_with_text(
             callback.message,
             text,
-            admin_kb.admin_products_list(
+            admin_kb.category_contents(
+                children,
                 products,
                 category_id=category_id,
                 page=page,
                 total_pages=total_pages,
                 currency=currency,
-            ),
-        )
-        await answer_callback_safely(callback)
-
-    async def admin_liquid_products(
-        self, callback: CallbackQuery, is_owner_admin: bool = False
-    ) -> None:
-        if not callback.data or not callback.message:
-            return
-        _, _, category_id_raw, volume_raw, page_raw = callback.data.split(":", maxsplit=4)
-        category_id = int(category_id_raw)
-        volume = int(volume_raw)
-        page = max(0, int(page_raw))
-        if volume not in {10, 15, 30}:
-            await answer_callback_safely(callback, "Невідомий об'єм", show_alert=True)
-            return
-
-        total = await self.catalog.count_liquid_products(category_id, volume)
-        total_pages = max(1, math.ceil(total / PRODUCTS_PER_PAGE))
-        page = min(page, total_pages - 1)
-        products = await self.catalog.list_liquid_products(
-            category_id, volume, limit=PRODUCTS_PER_PAGE,
-            offset=page * PRODUCTS_PER_PAGE,
-        )
-        currency = await self.catalog.get_setting("currency", "грн")
-        text = f"<b>💧 Рідини {volume} мл</b>\n\nТоварів: {total}"
-        if not products:
-            text += "\n\nТоварів у цьому об'ємі поки немає."
-        await replace_with_text(
-            callback.message,
-            text,
-            admin_kb.admin_liquid_products_list(
-                products, category_id=category_id, volume=volume, page=page,
-                total_pages=total_pages, currency=currency,
+                parent_id=category.parent_id,
             ),
         )
         await answer_callback_safely(callback)

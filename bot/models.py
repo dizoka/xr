@@ -10,6 +10,7 @@ class Category:
     emoji: str
     position: int
     active: bool
+    parent_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

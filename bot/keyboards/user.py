@@ -55,29 +55,9 @@ def categories_menu(
     safe_promotions_url = _safe_contact_url(promotions_url)
     for category in categories:
         category_name = category.name.strip().casefold()
-
-        # Технічні підкатегорії рідин не показуємо в головному каталозі.
-        # Вони відкриваються лише після натискання основної кнопки «Рідини».
-        normalized = category_name.replace(" ", "")
-        is_liquid_volume = any(
-            marker in normalized
-            for marker in (
-                "рідини30мл", "рідини15мл", "рідини10мл",
-                "жидкости30мл", "жидкости15мл", "жидкости10мл",
-                "liquids30ml", "liquids15ml", "liquids10ml",
-            )
-        )
-        if is_liquid_volume:
-            continue
-
         if category_name == "акції" and safe_promotions_url:
             builder.button(
                 text=f"{category.emoji} {category.name}", url=safe_promotions_url
-            )
-        elif category_name in {"рідини", "жидкости", "liquids"}:
-            builder.button(
-                text=f"{category.emoji} {category.name}",
-                callback_data="u:liquids",
             )
         else:
             builder.button(
@@ -90,14 +70,65 @@ def categories_menu(
 
 
 
-def liquid_volumes_menu() -> InlineKeyboardMarkup:
-    """Підменю рідин: кнопки є віртуальними, окремих категорій у БД немає."""
+def subcategories_menu(
+    categories: list[Category],
+    *,
+    parent_id: int,
+    grandparent_id: int | None,
+) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    for volume in (30, 15, 10):
-        builder.button(text=f"💧 {volume} мл", callback_data=f"u:liqv:{volume}:0")
-    builder.button(text="◀️ До категорій", callback_data="u:catalog")
+    for category in categories:
+        builder.button(
+            text=f"{category.emoji} {category.name}",
+            callback_data=f"u:c:{category.id}:0",
+        )
+    back = "u:catalog" if grandparent_id is None else f"u:c:{grandparent_id}:0"
+    builder.button(text="◀️ Назад", callback_data=back)
     builder.button(text="🏠 Головне меню", callback_data="u:home")
     builder.adjust(1)
+    return builder.as_markup()
+
+
+def category_contents_menu(
+    children: list[Category],
+    products: list[Product],
+    *,
+    category_id: int,
+    parent_id: int | None,
+    page: int,
+    total_pages: int,
+    currency: str,
+    external_catalog_url: str = "",
+) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for child in children:
+        builder.button(
+            text=f"📂 {child.emoji} {child.name}",
+            callback_data=f"u:c:{child.id}:0",
+        )
+    for product in products:
+        label = product_title(product)
+        if not product.in_stock:
+            label = f"❌ {label} — немає"
+        builder.button(text=label, callback_data=f"u:p:{product.id}:{page}")
+    builder.adjust(1)
+    navigation: list[InlineKeyboardButton] = []
+    if page > 0:
+        navigation.append(InlineKeyboardButton(text="◀️", callback_data=f"u:c:{category_id}:{page-1}"))
+    if total_pages > 1:
+        navigation.append(InlineKeyboardButton(text=f"{page+1}/{total_pages}", callback_data="noop"))
+    if page + 1 < total_pages:
+        navigation.append(InlineKeyboardButton(text="▶️", callback_data=f"u:c:{category_id}:{page+1}"))
+    if navigation:
+        builder.row(*navigation)
+    safe_external = _safe_contact_url(external_catalog_url)
+    if safe_external:
+        builder.row(InlineKeyboardButton(text="📋 Переглянути повний список", url=safe_external))
+    back = "u:catalog" if parent_id is None else f"u:c:{parent_id}:0"
+    builder.row(
+        InlineKeyboardButton(text="◀️ Назад", callback_data=back),
+        InlineKeyboardButton(text="🏠 Меню", callback_data="u:home"),
+    )
     return builder.as_markup()
 
 def products_menu(
@@ -108,9 +139,6 @@ def products_menu(
     total_pages: int,
     currency: str,
     external_catalog_url: str = "",
-    back_callback: str = "u:catalog",
-    back_text: str = "◀️ Категорії",
-    page_callback_prefix: str = "u:c",
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for product in products:
@@ -127,7 +155,7 @@ def products_menu(
     if page > 0:
         navigation.append(
             InlineKeyboardButton(
-                text="◀️", callback_data=f"{page_callback_prefix}:{category_id}:{page - 1}"
+                text="◀️", callback_data=f"u:c:{category_id}:{page - 1}"
             )
         )
     if total_pages > 1:
@@ -137,7 +165,7 @@ def products_menu(
     if page + 1 < total_pages:
         navigation.append(
             InlineKeyboardButton(
-                text="▶️", callback_data=f"{page_callback_prefix}:{category_id}:{page + 1}"
+                text="▶️", callback_data=f"u:c:{category_id}:{page + 1}"
             )
         )
     if navigation:
@@ -153,7 +181,7 @@ def products_menu(
         )
 
     builder.row(
-        InlineKeyboardButton(text=back_text, callback_data=back_callback),
+        InlineKeyboardButton(text="◀️ Категорії", callback_data="u:catalog"),
         InlineKeyboardButton(text="🏠 Меню", callback_data="u:home"),
     )
     return builder.as_markup()
@@ -163,7 +191,6 @@ def product_menu(
     product: Product,
     return_page: int,
     contact_url: str = "",
-    back_callback: str | None = None,
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     if product.in_stock:
@@ -173,7 +200,7 @@ def product_menu(
         builder.button(text="💬 Написати продавцю", url=safe_url)
     builder.button(
         text="◀️ Назад до товарів",
-        callback_data=back_callback or f"u:c:{product.category_id}:{return_page}",
+        callback_data=f"u:c:{product.category_id}:{return_page}",
     )
     builder.button(text="🏠 Головне меню", callback_data="u:home")
     builder.adjust(1)

@@ -86,7 +86,9 @@ class Database:
                 emoji TEXT NOT NULL DEFAULT '📦',
                 position INTEGER NOT NULL DEFAULT 0,
                 active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0, 1)),
-                archived INTEGER NOT NULL DEFAULT 0 CHECK(archived IN (0, 1))
+                archived INTEGER NOT NULL DEFAULT 0 CHECK(archived IN (0, 1)),
+                parent_id INTEGER,
+                FOREIGN KEY(parent_id) REFERENCES categories(id) ON DELETE CASCADE
             );
 
             CREATE TABLE IF NOT EXISTS products (
@@ -166,6 +168,13 @@ class Database:
                     self.connection.execute(
                         "ALTER TABLE categories ADD COLUMN archived INTEGER NOT NULL DEFAULT 0"
                     )
+                if "parent_id" not in category_columns:
+                    self.connection.execute(
+                        "ALTER TABLE categories ADD COLUMN parent_id INTEGER"
+                    )
+                self.connection.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_categories_parent ON categories(parent_id, position, id)"
+                )
 
                 product_columns = {
                     str(row[1])
@@ -294,6 +303,63 @@ class Database:
                 self.connection.execute(
                     "DELETE FROM fsm_states WHERE updated_at < datetime('now', '-2 days')"
                 )
+
+                # Одноразово відкочуємо лише помилково створену структуру рідин.
+                # POD-системи, снюс, картриджі та інші товари не зачіпаються.
+                rollback_done = self.connection.execute(
+                    "SELECT value FROM settings WHERE key = 'liquids_experiment_rollback_v1'"
+                ).fetchone()
+                if rollback_done is None:
+                    generated_liquids = (
+                        'Chaser', 'Octobar NFT', 'Flavorlab P1', 'Flavorlab Puff',
+                        'Punch Neon', 'Vape Shot', 'Chaser Special Berry',
+                        'Flavorlab FL350 mini', 'Lucky', 'Octobar X',
+                        'Octobar Fresh & Sour', 'Chaser For Pods', 'Chaser Lux',
+                        'Chaser Black', 'Chaser Limitini Editini',
+                        'Chaser Halloween Limited', 'Chaser Mix (Ultra)',
+                        'Chaser My Mint', 'Chaser 7 Years', 'Chaser Christmas',
+                        'Chaser Beat', 'Nova', 'Octobar Twins',
+                        'Octobar Black Limit', 'Flavorlab Lady', 'Flavorlab Triple',
+                        'Flavorlab PE1000', 'Flavorlab Aroma Max', 'Flavorlab FL350',
+                        'M-Cake'
+                    )
+                    placeholders = ','.join('?' for _ in generated_liquids)
+                    self.connection.execute(
+                        f"UPDATE products SET archived = 1, in_stock = 0 "
+                        f"WHERE name IN ({placeholders}) AND (price = '0' OR price = '' OR description LIKE '%мл%')",
+                        generated_liquids,
+                    )
+                    bad_category_rows = self.connection.execute(
+                        "SELECT id FROM categories WHERE lower(trim(name)) IN "
+                        "('рідини 30 мл','рідини 15 мл','рідини 10 мл')"
+                    ).fetchall()
+                    for row in bad_category_rows:
+                        bad_id = int(row[0])
+                        self.connection.execute(
+                            "UPDATE products SET archived = 1, in_stock = 0 WHERE category_id = ?",
+                            (bad_id,),
+                        )
+                        self.connection.execute(
+                            "UPDATE categories SET archived = 1, active = 0 WHERE id = ?",
+                            (bad_id,),
+                        )
+                    liquid_rows = self.connection.execute(
+                        "SELECT id FROM categories WHERE archived = 0 AND lower(trim(name)) = 'рідини' ORDER BY id"
+                    ).fetchall()
+                    for duplicate in liquid_rows[1:]:
+                        duplicate_id = int(duplicate[0])
+                        self.connection.execute(
+                            "UPDATE products SET archived = 1, in_stock = 0 WHERE category_id = ?",
+                            (duplicate_id,),
+                        )
+                        self.connection.execute(
+                            "UPDATE categories SET archived = 1, active = 0 WHERE id = ?",
+                            (duplicate_id,),
+                        )
+                    self.connection.execute(
+                        "INSERT INTO settings(key, value) VALUES ('liquids_experiment_rollback_v1', '1')"
+                    )
+
                 self.connection.commit()
 
             await asyncio.to_thread(_initialize)
@@ -301,7 +367,6 @@ class Database:
         await self._seed_defaults()
         await self._migrate_ukrainian_defaults()
         await self._seed_cartridge_catalog()
-        await self._repair_liquid_catalog()
 
     async def _seed_defaults(self) -> None:
         async with self._lock:
@@ -484,107 +549,6 @@ class Database:
                 self.connection.commit()
 
             await asyncio.to_thread(_seed)
-
-
-    async def _repair_liquid_catalog(self) -> None:
-        """Прибирає помилково створені рідини й дублікати категорій.
-
-        Залишає одну категорію «Рідини», повертає в неї старі користувацькі
-        товари та розкладає їх по віртуальних об'ємах 30/15/10 мл.
-        Автоматично додані раніше товари з міткою ``[volume:...]``
-        архівуються, тому лічильник товарів повертається до реального.
-        """
-        async with self._lock:
-            def _repair() -> None:
-                rows = self.connection.execute(
-                    """SELECT id, name FROM categories
-                    WHERE archived = 0 AND (
-                        lower(trim(name)) IN ('рідини', 'жидкости', 'liquids')
-                        OR lower(trim(name)) LIKE 'рідини %мл'
-                        OR lower(trim(name)) LIKE 'жидкости %мл'
-                        OR lower(trim(name)) LIKE 'liquids %ml'
-                    ) ORDER BY id ASC"""
-                ).fetchall()
-
-                parent_id = None
-                for category_id, name in rows:
-                    if str(name).strip().casefold() in {'рідини', 'жидкости', 'liquids'}:
-                        parent_id = int(category_id)
-                        break
-
-                if parent_id is None:
-                    pos = self.connection.execute(
-                        "SELECT COALESCE(MAX(position), 0) + 1 FROM categories"
-                    ).fetchone()[0]
-                    cur = self.connection.execute(
-                        "INSERT INTO categories(name, emoji, position, active, archived) "
-                        "VALUES ('Рідини', '💧', ?, 1, 0)",
-                        (int(pos),),
-                    )
-                    parent_id = int(cur.lastrowid)
-
-                self.connection.execute(
-                    "UPDATE categories SET name='Рідини', emoji='💧', active=1, archived=0 WHERE id=?",
-                    (parent_id,),
-                )
-
-                liquid_ids = [int(row[0]) for row in rows]
-                if parent_id not in liquid_ids:
-                    liquid_ids.append(parent_id)
-
-                placeholders = ','.join('?' for _ in liquid_ids)
-
-                # Прибираємо тільки ті товари, які бот помилково додавав автоматично.
-                self.connection.execute(
-                    f"""UPDATE products
-                    SET archived=1, in_stock=0
-                    WHERE category_id IN ({placeholders})
-                      AND description LIKE '[volume:%]%'""",
-                    tuple(liquid_ids),
-                )
-
-                # Повертаємо старі реальні товари користувача в одну категорію.
-                self.connection.execute(
-                    f"""UPDATE products
-                    SET category_id=?, archived=0
-                    WHERE category_id IN ({placeholders})
-                      AND description NOT LIKE '[volume:%]%'""",
-                    (parent_id, *liquid_ids),
-                )
-
-                # Розподіляємо старі товари по об'ємах. Якщо об'єм не вказаний,
-                # за замовчуванням відносимо до 30 мл — це можна змінити пізніше.
-                self.connection.execute(
-                    """UPDATE products
-                    SET description =
-                        CASE
-                            WHEN lower(name || ' ' || brand || ' ' || description) LIKE '%10 мл%'
-                              OR lower(name || ' ' || brand || ' ' || description) LIKE '%10ml%'
-                                THEN '[volume:10] ' || description
-                            WHEN lower(name || ' ' || brand || ' ' || description) LIKE '%15 мл%'
-                              OR lower(name || ' ' || brand || ' ' || description) LIKE '%15ml%'
-                                THEN '[volume:15] ' || description
-                            ELSE '[volume:30] ' || description
-                        END
-                    WHERE category_id=? AND archived=0
-                      AND description NOT LIKE '[volume:%]%'""",
-                    (parent_id,),
-                )
-
-                # Усі дублікати категорій прибираємо з каталогу й адмін-панелі.
-                for category_id in liquid_ids:
-                    if category_id != parent_id:
-                        self.connection.execute(
-                            "UPDATE categories SET active=0, archived=1 WHERE id=?",
-                            (category_id,),
-                        )
-
-                self.connection.execute(
-                    "INSERT OR REPLACE INTO settings(key, value) VALUES ('liquid_catalog_repaired_v5', '1')"
-                )
-                self.connection.commit()
-
-            await asyncio.to_thread(_repair)
 
     async def execute(self, query: str, parameters: Sequence[Any] = ()) -> int:
         async with self._lock:
