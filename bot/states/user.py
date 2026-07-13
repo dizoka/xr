@@ -7,4 +7,5 @@ class UserSearchStates(StatesGroup):
 
 class UserOrderStates(StatesGroup):
     quantity = State()
+    details = State()
     cart = State()

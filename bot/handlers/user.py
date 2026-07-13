@@ -77,6 +77,12 @@ class UserHandlers:
             F.text,
             ~F.text.startswith("/"),
         )
+        self.router.message.register(
+            self.order_details_message,
+            UserOrderStates.details,
+            F.text,
+            ~F.text.startswith("/"),
+        )
 
         self.router.callback_query.register(self.noop, F.data == "noop")
         self.router.callback_query.register(self.age_yes, F.data == "age:yes")
@@ -94,6 +100,9 @@ class UserHandlers:
         )
         self.router.callback_query.register(
             self.order_quantity, F.data.startswith("u:qty:")
+        )
+        self.router.callback_query.register(
+            self.order_details_skip, F.data == "u:details:skip"
         )
         self.router.callback_query.register(
             self.cart_add_more, F.data == "u:cart:add"
@@ -449,7 +458,17 @@ class UserHandlers:
             quantity = max(1, quantity - 1)
         elif action == "confirm":
             await state.update_data(quantity=quantity, variant="", variant_label="")
-            await self._add_current_item_to_cart(callback.message, state)
+            await state.set_state(UserOrderStates.details)
+            await callback.message.answer(
+                "<b>✍️ Деталі товару</b>\n\n"
+                "Напишіть одним повідомленням усе потрібне для цього товару:\n"
+                "• бажаний колір або смак;\n"
+                "• адресу доставки;\n"
+                "• бажаний час;\n"
+                "• інший коментар.\n\n"
+                "Можна написати лише те, що для вас важливо.",
+                reply_markup=user_kb.order_details_menu(),
+            )
             return
         await state.update_data(quantity=quantity)
         try:
@@ -458,6 +477,29 @@ class UserHandlers:
             )
         except Exception:
             logger.debug("Не вдалося оновити клавіатуру кількості", exc_info=True)
+
+
+    async def order_details_message(self, message: Message, state: FSMContext) -> None:
+        text = (message.text or "").strip()
+        if len(text) > 500:
+            await message.answer("Коментар занадто довгий. Максимум 500 символів.")
+            return
+        await state.update_data(
+            variant=text,
+            variant_label="Деталі замовлення",
+        )
+        await self._add_current_item_to_cart(message, state)
+
+    async def order_details_skip(self, callback: CallbackQuery, state: FSMContext) -> None:
+        await answer_callback_safely(callback, "Без додаткових деталей")
+        if not callback.message:
+            return
+        data = await state.get_data()
+        if not data.get("product_id"):
+            await callback.message.answer("Цей вибір застарів. Оберіть товар ще раз.")
+            return
+        await state.update_data(variant="", variant_label="")
+        await self._add_current_item_to_cart(callback.message, state)
 
     async def _add_current_item_to_cart(self, message: Message, state: FSMContext) -> None:
         data = await state.get_data()

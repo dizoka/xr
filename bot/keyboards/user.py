@@ -277,3 +277,11 @@ def cart_menu(contact_url: str = "") -> InlineKeyboardMarkup:
         builder.button(text="💬 Написати продавцю", url=safe_url)
     builder.adjust(1)
     return builder.as_markup()
+
+
+def order_details_menu() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="⏭ Без коментаря", callback_data="u:details:skip")
+    builder.button(text="❌ Скасувати", callback_data="u:order:cancel")
+    builder.adjust(1)
+    return builder.as_markup()

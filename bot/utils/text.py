@@ -133,6 +133,9 @@ def cart_text(items: list[dict], currency: str) -> str:
         total += subtotal
         lines.append(f"<b>{index}. {h(item.get('title', 'Товар'))}</b>")
         lines.append(f"Кількість: <b>{qty}</b>")
+        details = str(item.get("variant", "")).strip()
+        if details:
+            lines.append(f"📝 Деталі: <b>{h(details)}</b>")
         if price > 0:
             lines.append(f"Сума: <b>{subtotal:g} {h(currency)}</b>")
         else:
@@ -161,6 +164,9 @@ def admin_cart_text(items: list[dict], currency: str, user_id: int, full_name: s
         total += subtotal
         lines.append(f"<b>{index}. {h(item.get('title', 'Товар'))}</b>")
         lines.append(f"Кількість: <b>{qty}</b>")
+        details = str(item.get("variant", "")).strip()
+        if details:
+            lines.append(f"📝 Деталі: <b>{h(details)}</b>")
         if price > 0:
             lines.append(f"Сума: <b>{subtotal:g} {h(currency)}</b>")
         else:
