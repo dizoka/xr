@@ -88,7 +88,7 @@ class UserHandlers:
         self.router.callback_query.register(self.info, F.data == "u:info")
         self.router.callback_query.register(self.search_start, F.data == "u:search")
         self.router.callback_query.register(self.liquids_menu, F.data == "u:liquids")
-        self.router.callback_query.register(self.liquid_category, F.data.startswith("u:liq:"))
+        self.router.callback_query.register(self.liquid_category, F.data.startswith("u:liqv:"))
         self.router.callback_query.register(self.category, F.data.startswith("u:c:"))
         self.router.callback_query.register(self.product, F.data.startswith("u:p:"))
         self.router.callback_query.register(
@@ -291,7 +291,6 @@ class UserHandlers:
         await answer_callback_safely(callback)
         if not await self._ensure_callback_access(callback) or not callback.message:
             return
-        categories = await self.catalog.list_liquid_volume_categories()
         text = (
             "<b>💧 Рідини</b>\n\n"
             "Оберіть потрібний об’єм:"
@@ -299,50 +298,46 @@ class UserHandlers:
         await replace_with_text(
             callback.message,
             text,
-            user_kb.liquid_volumes_menu(categories),
+            user_kb.liquid_volumes_menu(),
         )
 
     async def liquid_category(self, callback: CallbackQuery) -> None:
         await answer_callback_safely(callback)
         if not await self._ensure_callback_access(callback) or not callback.message:
             return
-        parsed = parse_callback_ints(callback.data, "u:liq:", 2)
+        parsed = parse_callback_ints(callback.data, "u:liqv:", 2)
         if parsed is None:
             await self.liquids_menu(callback)
             return
-        category_id, page = parsed
-        category = await self.catalog.get_category(category_id)
-        if category is None or not category.active:
+        volume, page = parsed
+        if volume not in {30, 15, 10}:
             await self.liquids_menu(callback)
             return
+        parent = await self.catalog.get_liquid_parent_category()
+        if parent is None:
+            await self._show_catalog(callback.message)
+            return
         page = max(0, page)
-        total = await self.catalog.count_products(category_id, only_in_stock=False)
+        total = await self.catalog.count_liquid_products(parent.id, volume)
         total_pages = max(1, math.ceil(total / PRODUCTS_PER_PAGE))
         page = min(page, total_pages - 1)
-        products = await self.catalog.list_products(
-            category_id,
-            limit=PRODUCTS_PER_PAGE,
+        products = await self.catalog.list_liquid_products(
+            parent.id, volume, limit=PRODUCTS_PER_PAGE,
             offset=page * PRODUCTS_PER_PAGE,
-            only_in_stock=False,
         )
         currency = await self._safe_setting("currency") or "грн"
-        volume = next((v for v in ("30", "15", "10") if v in category.name), "")
-        text = (
-            f"<b>💧 Рідини {h(volume)} мл</b>\n\n"
-            "Оберіть рідину нижче. Смаки уточнюйте у продавця."
-        )
         await replace_with_text(
             callback.message,
-            text,
+            f"<b>💧 Рідини {volume} мл</b>\n\nОберіть рідину нижче. Смаки уточнюйте у продавця.",
             user_kb.products_menu(
                 products,
-                category_id=category_id,
+                category_id=volume,
                 page=page,
                 total_pages=total_pages,
                 currency=currency,
                 back_callback="u:liquids",
                 back_text="◀️ Об’єм рідини",
-                page_callback_prefix="u:liq",
+                page_callback_prefix="u:liqv",
             ),
         )
 
@@ -364,11 +359,10 @@ class UserHandlers:
             return
 
         if category.name.strip().casefold() in {"рідини", "жидкости", "liquids"}:
-            categories = await self.catalog.list_liquid_volume_categories()
             await replace_with_text(
                 callback.message,
                 "<b>💧 Рідини</b>\n\nОберіть потрібний об’єм:",
-                user_kb.liquid_volumes_menu(categories),
+                user_kb.liquid_volumes_menu(),
             )
             return
 
@@ -440,10 +434,10 @@ class UserHandlers:
                 product,
                 max(0, return_page),
                 contact_url,
-                back_callback_prefix=(
-                    "u:liq"
-                    if product.category_name.strip().casefold().startswith(("рідини ", "жидкости "))
-                    else "u:c"
+                back_callback=(
+                    f"u:liqv:{volume}:0"
+                    if (volume := next((v for v in (30, 15, 10) if f"[volume:{v}]" in product.description), None))
+                    else None
                 ),
             ),
         )

@@ -487,7 +487,7 @@ class Database:
 
 
     async def _seed_liquid_catalog(self) -> None:
-        """Створює підкатегорії рідин 30/15/10 мл і додає товари зі списку магазину."""
+        """Одноразово перебудовує рідини: одна категорія та віртуальні об'єми."""
         liquids: dict[int, tuple[tuple[str, str], ...]] = {
             10: (("Chaser", ""), ("Octobar", "NFT"), ("Flavorlab", "P1"), ("Flavorlab", "Puff"), ("Punch", "Neon")),
             15: (("Vape Shot", ""), ("Chaser", "Special Berry"), ("Flavorlab", "FL350 mini"), ("Lucky", ""), ("Octobar", "NFT"), ("Octobar", "X"), ("Octobar", "Fresh & Sour")),
@@ -505,77 +505,82 @@ class Database:
         }
         async with self._lock:
             def _seed() -> None:
-                # У базі могли залишитися кілька старих категорій «Рідини»
-                # після попередніх оновлень. Залишаємо лише одну основну кнопку,
-                # а дублікати приховуємо автоматично.
-                parent_rows = self.connection.execute(
-                    """SELECT id FROM categories WHERE archived = 0
-                    AND lower(trim(name)) IN ('рідини', 'жидкости', 'liquids')
-                    ORDER BY id ASC"""
+                migration_key = "liquid_catalog_single_category_v3"
+                done = self.connection.execute(
+                    "SELECT value FROM settings WHERE key = ?", (migration_key,)
+                ).fetchone()
+                if done and str(done[0]) == "1":
+                    return
+
+                rows = self.connection.execute(
+                    """SELECT id, name FROM categories
+                    WHERE archived = 0 AND (
+                        lower(trim(name)) IN ('рідини', 'жидкости', 'liquids')
+                        OR lower(trim(name)) LIKE 'рідини %мл'
+                        OR lower(trim(name)) LIKE 'жидкости %мл'
+                        OR lower(trim(name)) LIKE 'liquids %ml'
+                    ) ORDER BY id ASC"""
                 ).fetchall()
-                if not parent_rows:
-                    row = self.connection.execute("SELECT COALESCE(MAX(position), 0) + 1 FROM categories").fetchone()
-                    position = int(row[0]) if row else 1
-                    cursor = self.connection.execute(
+
+                parent_id = None
+                for category_id, name in rows:
+                    if str(name).strip().casefold() in {"рідини", "жидкости", "liquids"}:
+                        parent_id = int(category_id)
+                        break
+                if parent_id is None:
+                    pos = self.connection.execute(
+                        "SELECT COALESCE(MAX(position), 0) + 1 FROM categories"
+                    ).fetchone()[0]
+                    cur = self.connection.execute(
                         "INSERT INTO categories(name, emoji, position, active, archived) VALUES ('Рідини', '💧', ?, 1, 0)",
-                        (position,),
+                        (int(pos),),
                     )
-                    parent_id = int(cursor.lastrowid)
-                else:
-                    parent_id = int(parent_rows[0][0])
-                    self.connection.execute(
-                        "UPDATE categories SET name = 'Рідини', emoji = '💧', active = 1, archived = 0 WHERE id = ?",
-                        (parent_id,),
-                    )
-                    duplicate_ids = [int(row[0]) for row in parent_rows[1:]]
-                    for duplicate_id in duplicate_ids:
+                    parent_id = int(cur.lastrowid)
+
+                self.connection.execute(
+                    "UPDATE categories SET name='Рідини', emoji='💧', active=1, archived=0 WHERE id=?",
+                    (parent_id,),
+                )
+
+                all_liquid_ids = [int(row[0]) for row in rows]
+                if parent_id not in all_liquid_ids:
+                    all_liquid_ids.append(parent_id)
+
+                # Видаляємо всі старі товари рідин і службові категорії об'ємів.
+                placeholders = ",".join("?" for _ in all_liquid_ids)
+                self.connection.execute(
+                    f"UPDATE products SET archived=1, in_stock=0 WHERE category_id IN ({placeholders})",
+                    tuple(all_liquid_ids),
+                )
+                for category_id in all_liquid_ids:
+                    if category_id != parent_id:
                         self.connection.execute(
-                            "UPDATE categories SET active = 0, archived = 1 WHERE id = ?",
-                            (duplicate_id,),
+                            "UPDATE categories SET active=0, archived=1 WHERE id=?",
+                            (category_id,),
                         )
 
-                max_row = self.connection.execute("SELECT COALESCE(MAX(position), 0) FROM categories").fetchone()
-                next_position = int(max_row[0]) if max_row else 0
-                category_ids: dict[int, int] = {}
+                position = 0
                 for volume in (30, 15, 10):
-                    category_name = f"Рідини {volume} мл"
-                    row = self.connection.execute(
-                        "SELECT id FROM categories WHERE archived = 0 AND lower(trim(name)) = lower(?) ORDER BY id ASC LIMIT 1",
-                        (category_name,),
-                    ).fetchone()
-                    if row is None:
-                        next_position += 1
-                        cursor = self.connection.execute(
-                            "INSERT INTO categories(name, emoji, position, active, archived) VALUES (?, '💧', ?, 1, 0)",
-                            (category_name, next_position),
-                        )
-                        category_id = int(cursor.lastrowid)
-                    else:
-                        category_id = int(row[0])
-                        self.connection.execute("UPDATE categories SET active = 1, archived = 0, emoji = '💧' WHERE id = ?", (category_id,))
-                    category_ids[volume] = category_id
-
-                for volume, products in liquids.items():
-                    category_id = category_ids[volume]
-                    row = self.connection.execute("SELECT COALESCE(MAX(position), 0) FROM products WHERE category_id = ?", (category_id,)).fetchone()
-                    product_position = int(row[0]) if row else 0
-                    for brand, name in products:
-                        exists = self.connection.execute(
-                            """SELECT 1 FROM products WHERE category_id = ? AND archived = 0
-                            AND lower(trim(brand)) = lower(trim(?))
-                            AND lower(trim(name)) = lower(trim(?)) LIMIT 1""",
-                            (category_id, brand, name),
-                        ).fetchone()
-                        if exists:
-                            continue
-                        product_position += 1
+                    for brand, name in liquids[volume]:
+                        position += 1
                         self.connection.execute(
                             """INSERT INTO products(
                                 category_id, name, brand, price, description, photo_file_id,
                                 in_stock, position, quantity, variant_type, archived
                             ) VALUES (?, ?, ?, '0', ?, NULL, 1, ?, 1, 'none', 0)""",
-                            (category_id, name, brand, f"Рідина {volume} мл. Наявність смаків уточнюйте у продавця.", product_position),
+                            (
+                                parent_id,
+                                name,
+                                brand,
+                                f"[volume:{volume}] Рідина {volume} мл. Наявність смаків уточнюйте у продавця.",
+                                position,
+                            ),
                         )
+
+                self.connection.execute(
+                    "INSERT OR REPLACE INTO settings(key, value) VALUES (?, '1')",
+                    (migration_key,),
+                )
                 self.connection.commit()
             await asyncio.to_thread(_seed)
 

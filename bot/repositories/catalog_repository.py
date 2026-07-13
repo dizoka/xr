@@ -141,28 +141,39 @@ class CatalogRepository:
             result.append(category)
         return result
 
-    async def list_liquid_volume_categories(self) -> list[Category]:
-        rows = await self._database.fetchall(
-            """
-            SELECT id, name, emoji, position, active
-            FROM categories
-            WHERE archived = 0
-              AND active = 1
-              AND lower(trim(name)) IN (
-                  'рідини 10 мл', 'рідини 15 мл', 'рідини 30 мл',
-                  'жидкости 10 мл', 'жидкости 15 мл', 'жидкости 30 мл'
-              )
-            ORDER BY
-                CASE
-                    WHEN name LIKE '%30%' THEN 1
-                    WHEN name LIKE '%15%' THEN 2
-                    WHEN name LIKE '%10%' THEN 3
-                    ELSE 4
-                END,
-                id ASC
-            """
+    async def get_liquid_parent_category(self) -> Category | None:
+        row = await self._database.fetchone(
+            """SELECT id, name, emoji, position, active FROM categories
+            WHERE archived = 0 AND active = 1
+              AND lower(trim(name)) IN ('рідини', 'жидкости', 'liquids')
+            ORDER BY id ASC LIMIT 1"""
         )
-        return [self._category_from_row(row) for row in rows]
+        return self._category_from_row(row) if row else None
+
+    async def count_liquid_products(self, category_id: int, volume: int) -> int:
+        row = await self._database.fetchone(
+            """SELECT COUNT(*) AS total FROM products
+            WHERE category_id = ? AND archived = 0
+              AND description LIKE ?""",
+            (category_id, f"[volume:{volume}]%"),
+        )
+        return int(row["total"]) if row else 0
+
+    async def list_liquid_products(
+        self, category_id: int, volume: int, *, limit: int, offset: int
+    ) -> list[Product]:
+        rows = await self._database.fetchall(
+            """SELECT
+                p.id, p.category_id, p.name, p.brand, p.price, p.description,
+                p.photo_file_id, p.in_stock, p.position, p.quantity, p.variant_type,
+                c.name AS category_name, c.emoji AS category_emoji
+            FROM products p JOIN categories c ON c.id = p.category_id
+            WHERE p.category_id = ? AND p.archived = 0 AND c.archived = 0
+              AND p.description LIKE ?
+            ORDER BY p.position ASC, p.id ASC LIMIT ? OFFSET ?""",
+            (category_id, f"[volume:{volume}]%", limit, offset),
+        )
+        return [self._product_from_row(row) for row in rows]
 
     async def get_category(self, category_id: int) -> Category | None:
         row = await self._database.fetchone(

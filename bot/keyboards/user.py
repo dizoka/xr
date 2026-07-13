@@ -90,24 +90,11 @@ def categories_menu(
 
 
 
-def liquid_volumes_menu(categories: list[Category]) -> InlineKeyboardMarkup:
-    """Підменю рідин за об'ємом: 30, 15 та 10 мл."""
+def liquid_volumes_menu() -> InlineKeyboardMarkup:
+    """Підменю рідин: кнопки є віртуальними, окремих категорій у БД немає."""
     builder = InlineKeyboardBuilder()
-    by_volume: dict[str, Category] = {}
-    for category in categories:
-        name = category.name.casefold()
-        for volume in ("30", "15", "10"):
-            if volume in name:
-                by_volume[volume] = category
-                break
-
-    for volume in ("30", "15", "10"):
-        category = by_volume.get(volume)
-        if category is not None:
-            builder.button(
-                text=f"💧 {volume} мл",
-                callback_data=f"u:liq:{category.id}:0",
-            )
+    for volume in (30, 15, 10):
+        builder.button(text=f"💧 {volume} мл", callback_data=f"u:liqv:{volume}:0")
     builder.button(text="◀️ До категорій", callback_data="u:catalog")
     builder.button(text="🏠 Головне меню", callback_data="u:home")
     builder.adjust(1)
@@ -176,7 +163,7 @@ def product_menu(
     product: Product,
     return_page: int,
     contact_url: str = "",
-    back_callback_prefix: str = "u:c",
+    back_callback: str | None = None,
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     if product.in_stock:
@@ -186,7 +173,7 @@ def product_menu(
         builder.button(text="💬 Написати продавцю", url=safe_url)
     builder.button(
         text="◀️ Назад до товарів",
-        callback_data=f"{back_callback_prefix}:{product.category_id}:{return_page}",
+        callback_data=back_callback or f"u:c:{product.category_id}:{return_page}",
     )
     builder.button(text="🏠 Головне меню", callback_data="u:home")
     builder.adjust(1)
