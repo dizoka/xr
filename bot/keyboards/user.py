@@ -103,7 +103,7 @@ def category_contents_menu(
     builder = InlineKeyboardBuilder()
     for child in children:
         builder.button(
-            text=f"📂 {child.emoji} {child.name}",
+            text=f"{child.emoji} {child.name}",
             callback_data=f"u:c:{child.id}:0",
         )
     for product in products:

@@ -87,7 +87,7 @@ def category_contents(children: list[Category], products: list[Product], *, cate
     builder = InlineKeyboardBuilder()
     for child in children:
         status = "✅" if child.active else "⛔"
-        builder.button(text=f"{status} 📂 {child.emoji} {child.name}", callback_data=f"a:plist:{child.id}:0")
+        builder.button(text=f"{status} {child.emoji} {child.name}", callback_data=f"a:plist:{child.id}:0")
     for product in products:
         status = "✅" if product.in_stock else "⛔"
         builder.button(text=f"{status} {product_title(product)} — {product.price} {currency}", callback_data=f"a:p:{product.id}:{page}")
