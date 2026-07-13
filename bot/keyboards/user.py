@@ -55,9 +55,29 @@ def categories_menu(
     safe_promotions_url = _safe_contact_url(promotions_url)
     for category in categories:
         category_name = category.name.strip().casefold()
+
+        # Технічні підкатегорії рідин не показуємо в головному каталозі.
+        # Вони відкриваються лише після натискання основної кнопки «Рідини».
+        normalized = category_name.replace(" ", "")
+        is_liquid_volume = any(
+            marker in normalized
+            for marker in (
+                "рідини30мл", "рідини15мл", "рідини10мл",
+                "жидкости30мл", "жидкости15мл", "жидкости10мл",
+                "liquids30ml", "liquids15ml", "liquids10ml",
+            )
+        )
+        if is_liquid_volume:
+            continue
+
         if category_name == "акції" and safe_promotions_url:
             builder.button(
                 text=f"{category.emoji} {category.name}", url=safe_promotions_url
+            )
+        elif category_name in {"рідини", "жидкости", "liquids"}:
+            builder.button(
+                text=f"{category.emoji} {category.name}",
+                callback_data="u:liquids",
             )
         else:
             builder.button(
