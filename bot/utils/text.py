@@ -158,7 +158,15 @@ def cart_text(items: list[dict], currency: str) -> str:
     return "\n".join(lines)
 
 
-def admin_cart_text(items: list[dict], currency: str, user_id: int, full_name: str, username: str | None) -> str:
+def admin_cart_text(
+    items: list[dict],
+    currency: str,
+    user_id: int,
+    full_name: str,
+    username: str | None,
+    *,
+    common_comment: str = "",
+) -> str:
     """Чистий чек для продавця без покупецьких підказок та повторного заголовка."""
     username_text = f"@{h(username)}" if username else "не вказано"
     lines = ["<b>🛒 Нове комплексне замовлення</b>", ""]
@@ -183,6 +191,8 @@ def admin_cart_text(items: list[dict], currency: str, user_id: int, full_name: s
             lines.append("Ціна: <b>уточнюється у продавця</b>")
         lines.append("")
     lines.append(f"<b>Разом за товарами з указаною ціною: {total:g} {h(currency)}</b>")
+    if common_comment:
+        lines.extend(["", f"📝 <b>Коментар до всього замовлення:</b> {h(common_comment)}"])
     lines.extend([
         "",
         f'👤 Покупець: <a href="tg://user?id={user_id}">{h(full_name)}</a>',
