@@ -285,9 +285,14 @@ def cart_menu(contact_url: str = "") -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def order_details_menu() -> InlineKeyboardMarkup:
+def checkout_comment_menu() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    builder.button(text="⏭ Без коментаря", callback_data="u:details:skip")
+    builder.button(text="✅ Оформити без коментаря", callback_data="u:details:skip")
     builder.button(text="❌ Скасувати", callback_data="u:order:cancel")
     builder.adjust(1)
     return builder.as_markup()
+
+
+# Сумісність зі старими викликами.
+def order_details_menu() -> InlineKeyboardMarkup:
+    return checkout_comment_menu()
