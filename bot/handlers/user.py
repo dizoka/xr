@@ -485,18 +485,10 @@ class UserHandlers:
         elif action == "minus":
             quantity = max(1, quantity - 1)
         elif action == "confirm":
+            # Не змушуємо покупця писати деталі для кожного товару.
+            # Після підтвердження кількості позиція одразу потрапляє в кошик.
             await state.update_data(quantity=quantity, variant="", variant_label="")
-            await state.set_state(UserOrderStates.details)
-            await callback.message.answer(
-                "<b>✍️ Деталі товару</b>\n\n"
-                "Напишіть одним повідомленням усе потрібне для цього товару:\n"
-                "• бажаний колір або смак;\n"
-                "• адресу доставки;\n"
-                "• бажаний час;\n"
-                "• інший коментар.\n\n"
-                "Можна написати лише те, що для вас важливо.",
-                reply_markup=user_kb.order_details_menu(),
-            )
+            await self._add_current_item_to_cart(callback.message, state)
             return
         await state.update_data(quantity=quantity)
         try:
@@ -508,26 +500,41 @@ class UserHandlers:
 
 
     async def order_details_message(self, message: Message, state: FSMContext) -> None:
+        """Один спільний коментар на все замовлення, а не на кожен товар."""
         text = (message.text or "").strip()
         if len(text) > 500:
             await message.answer("Коментар занадто довгий. Максимум 500 символів.")
             return
-        await state.update_data(
-            variant=text,
-            variant_label="Деталі замовлення",
+        data = await state.get_data()
+        if not data.get("checkout_pending"):
+            await state.clear()
+            await message.answer("Цей крок застарів. Відкрийте кошик і оформіть замовлення ще раз.")
+            return
+        if message.from_user is None:
+            return
+        await self._finalize_cart_checkout(
+            message=message,
+            user=message.from_user,
+            bot=message.bot,
+            state=state,
+            common_comment=text,
         )
-        await self._add_current_item_to_cart(message, state)
 
     async def order_details_skip(self, callback: CallbackQuery, state: FSMContext) -> None:
-        await answer_callback_safely(callback, "Без додаткових деталей")
+        await answer_callback_safely(callback, "Оформлюю без коментаря")
         if not callback.message:
             return
         data = await state.get_data()
-        if not data.get("product_id"):
-            await callback.message.answer("Цей вибір застарів. Оберіть товар ще раз.")
+        if not data.get("checkout_pending"):
+            await callback.message.answer("Цей крок застарів. Відкрийте кошик і оформіть замовлення ще раз.")
             return
-        await state.update_data(variant="", variant_label="")
-        await self._add_current_item_to_cart(callback.message, state)
+        await self._finalize_cart_checkout(
+            message=callback.message,
+            user=callback.from_user,
+            bot=callback.bot,
+            state=state,
+            common_comment="",
+        )
 
     async def _add_current_item_to_cart(self, message: Message, state: FSMContext) -> None:
         data = await state.get_data()
@@ -567,6 +574,7 @@ class UserHandlers:
             await self._show_catalog(callback.message)
 
     async def cart_checkout(self, callback: CallbackQuery, state: FSMContext) -> None:
+        """Просить максимум один необов'язковий коментар на все замовлення."""
         await answer_callback_safely(callback)
         if not callback.message:
             return
@@ -574,6 +582,32 @@ class UserHandlers:
         cart = list(data.get("cart", []))
         if not cart:
             await callback.message.answer("Кошик порожній.", reply_markup=user_kb.back_home())
+            return
+
+        await state.set_state(UserOrderStates.details)
+        await state.update_data(checkout_pending=True)
+        await callback.message.answer(
+            "<b>📝 Останній крок</b>\n\n"
+            "За потреби одним повідомленням напишіть спільні деталі для всього замовлення: "
+            "колір або смак, адресу, час доставки чи інше побажання.\n\n"
+            "Або просто натисніть «✅ Оформити без коментаря».",
+            reply_markup=user_kb.checkout_comment_menu(),
+        )
+
+    async def _finalize_cart_checkout(
+        self,
+        *,
+        message: Message,
+        user: User,
+        bot: Bot,
+        state: FSMContext,
+        common_comment: str,
+    ) -> None:
+        data = await state.get_data()
+        cart = list(data.get("cart", []))
+        if not cart:
+            await state.clear()
+            await message.answer("Кошик порожній.", reply_markup=user_kb.back_home())
             return
 
         currency = await self._safe_setting("currency") or "грн"
@@ -589,22 +623,21 @@ class UserHandlers:
             total += subtotal
             details_lines.append(f"{index}. {item.get('title', 'Товар')}")
             details_lines.append(f"Кількість: {quantity}")
-            item_details = str(item.get("variant", "")).strip()
-            if item_details:
-                details_lines.append(f"Деталі: {item_details}")
             details_lines.append(
                 f"Сума: {subtotal:g} {currency}"
                 if price > 0
                 else "Ціна: уточнюється у продавця"
             )
             details_lines.append("")
+        if common_comment:
+            details_lines.append(f"Спільний коментар: {common_comment}")
 
         request_key = str(data.get("request_key") or uuid4().hex)
         try:
             _, created = await self.inquiries.create_cart_snapshot(
-                user_id=callback.from_user.id,
-                username=callback.from_user.username,
-                full_name=callback.from_user.full_name,
+                user_id=user.id,
+                username=user.username,
+                full_name=user.full_name,
                 first_product_id=int(cart[0]["product_id"]),
                 item_count=len(cart),
                 total_price=f"{total:g}",
@@ -613,7 +646,7 @@ class UserHandlers:
             )
         except Exception:
             logger.exception("Не вдалося створити одну заявку для кошика")
-            await callback.message.answer(
+            await message.answer(
                 "Не вдалося оформити замовлення. Спробуйте ще раз трохи пізніше."
             )
             return
@@ -621,17 +654,24 @@ class UserHandlers:
         if created:
             staff_ids = await self.catalog.list_staff_admins()
             recipients = set(self.admin_ids) | set(staff_ids)
-            await NotificationService(callback.bot).send_many(
+            await NotificationService(bot).send_many(
                 recipients,
                 admin_cart_text(
-                    cart, currency, callback.from_user.id,
-                    callback.from_user.full_name, callback.from_user.username
+                    cart,
+                    currency,
+                    user.id,
+                    user.full_name,
+                    user.username,
+                    common_comment=common_comment,
                 ),
             )
         await state.clear()
         contact_url = await self._safe_setting("contact_url")
-        await callback.message.answer(
-            "<b>✅ Замовлення сформовано</b>\n\n" + cart_text(cart, currency),
+        customer_text = "<b>✅ Замовлення сформовано</b>\n\n" + cart_text(cart, currency)
+        if common_comment:
+            customer_text += f"\n\n📝 <b>Коментар:</b> {h(common_comment)}"
+        await message.answer(
+            customer_text,
             reply_markup=user_kb.order_ready_menu(contact_url),
         )
 
