@@ -67,6 +67,16 @@ def admin_product_text(product: Product, currency: str) -> str:
 
 def inquiry_text(inquiry: Inquiry, currency: str) -> str:
     username = f"@{h(inquiry.username)}" if inquiry.username else "не вказано"
+    if inquiry.category_name == "__cart__":
+        return (
+            f"<b>🛒 Комплексне замовлення #{inquiry.id}</b>\n\n"
+            f"{h(inquiry.comment)}\n\n"
+            f"<b>Разом: {h(inquiry.product_price)} {h(currency)}</b>\n\n"
+            f'<a href="tg://user?id={inquiry.user_id}">👤 {h(inquiry.full_name)}</a>\n'
+            f"Username: {username}\n"
+            f"Telegram ID: <code>{inquiry.user_id}</code>\n"
+            f"🕒 Створено: {h(inquiry.created_at)}"
+        )
     variant_label = inquiry.variant_label.strip() or "Варіант"
     emoji = (
         "🎨"
