@@ -88,6 +88,56 @@ class InquiryRepository:
             raise RuntimeError("Не вдалося створити заявку")
         return int(row["id"]), True
 
+
+    async def create_cart_snapshot(
+        self,
+        *,
+        user_id: int,
+        username: str | None,
+        full_name: str,
+        first_product_id: int,
+        item_count: int,
+        total_price: str,
+        cart_details: str,
+        request_key: str,
+    ) -> tuple[int, bool]:
+        """Створює одну заявку для всього кошика, а не окрему на кожен товар."""
+        existing = await self._database.fetchone(
+            "SELECT id FROM inquiries WHERE request_key = ?",
+            (request_key,),
+        )
+        if existing:
+            return int(existing["id"]), False
+
+        await self._database.execute(
+            """
+            INSERT OR IGNORE INTO inquiries(
+                user_id, username, full_name, product_id,
+                product_name_snapshot, product_price_snapshot,
+                category_name_snapshot, variant_label_snapshot,
+                variant, comment, request_key
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, '', '', ?, ?)
+            """,
+            (
+                user_id,
+                username,
+                full_name,
+                first_product_id,
+                f"Комплексне замовлення ({item_count} поз.)",
+                total_price,
+                "__cart__",
+                cart_details,
+                request_key,
+            ),
+        )
+        row = await self._database.fetchone(
+            "SELECT id FROM inquiries WHERE request_key = ?",
+            (request_key,),
+        )
+        if row is None:
+            raise RuntimeError("Не вдалося створити комплексну заявку")
+        return int(row["id"]), True
+
     async def get(self, inquiry_id: int) -> Inquiry | None:
         row = await self._database.fetchone(
             """
