@@ -576,24 +576,49 @@ class UserHandlers:
             await callback.message.answer("Кошик порожній.", reply_markup=user_kb.back_home())
             return
 
-        created_any = False
-        for index, item in enumerate(cart):
-            try:
-                await self.order_service.create_order(
-                    user_id=callback.from_user.id,
-                    username=callback.from_user.username,
-                    full_name=callback.from_user.full_name,
-                    product_id=int(item["product_id"]),
-                    variant_label=str(item.get("variant_label", "")),
-                    variant=str(item.get("variant", "")),
-                    request_key=f"{data.get('request_key') or uuid4().hex}:{index}:{item.get('quantity', 1)}",
-                )
-                created_any = True
-            except (ProductUnavailableError, DuplicateOrderError):
-                logger.warning("Не вдалося додати позицію кошика: %s", item)
-
         currency = await self._safe_setting("currency") or "грн"
-        if created_any:
+        total = 0.0
+        details_lines: list[str] = []
+        for index, item in enumerate(cart, 1):
+            quantity = max(1, int(item.get("quantity", 1)))
+            try:
+                price = float(str(item.get("price", "0")).replace(",", "."))
+            except ValueError:
+                price = 0.0
+            subtotal = price * quantity
+            total += subtotal
+            details_lines.append(f"{index}. {item.get('title', 'Товар')}")
+            details_lines.append(f"Кількість: {quantity}")
+            item_details = str(item.get("variant", "")).strip()
+            if item_details:
+                details_lines.append(f"Деталі: {item_details}")
+            details_lines.append(
+                f"Сума: {subtotal:g} {currency}"
+                if price > 0
+                else "Ціна: уточнюється у продавця"
+            )
+            details_lines.append("")
+
+        request_key = str(data.get("request_key") or uuid4().hex)
+        try:
+            _, created = await self.inquiries.create_cart_snapshot(
+                user_id=callback.from_user.id,
+                username=callback.from_user.username,
+                full_name=callback.from_user.full_name,
+                first_product_id=int(cart[0]["product_id"]),
+                item_count=len(cart),
+                total_price=f"{total:g}",
+                cart_details="\n".join(details_lines).strip(),
+                request_key=f"cart:{request_key}",
+            )
+        except Exception:
+            logger.exception("Не вдалося створити одну заявку для кошика")
+            await callback.message.answer(
+                "Не вдалося оформити замовлення. Спробуйте ще раз трохи пізніше."
+            )
+            return
+
+        if created:
             staff_ids = await self.catalog.list_staff_admins()
             recipients = set(self.admin_ids) | set(staff_ids)
             await NotificationService(callback.bot).send_many(
